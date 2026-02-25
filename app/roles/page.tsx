@@ -53,16 +53,20 @@ export default function RoleSelectionPage() {
     }
 
     // Create a user with selected roles
+    const firstRole = selectedRoles[0];
     const newUser: UserType = {
       id: `user-${Date.now()}`,
       email: email || undefined,
       roles: selectedRoles,
-      activeRole: selectedRoles[0],
+      activeRole: firstRole,
       createdAt: new Date(),
     };
 
+    console.log(`[v0] Creating user with roles: ${selectedRoles.join(", ")}, activeRole: ${firstRole}`);
     setCurrentUser(newUser);
-    router.push(`/${selectedRoles[0]}/dashboard`);
+    
+    // Ensure router redirects to the first selected role's dashboard
+    router.push(`/${firstRole}/dashboard`);
   };
 
   return (

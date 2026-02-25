@@ -450,7 +450,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   ): Promise<Record<string, unknown> | null> => {
     try {
       const registry = await BlockchainService.resolveDIDOnchain(did);
-      return registry ? (registry as Record<string, unknown>) : null;
+      return registry ? (registry as unknown as Record<string, unknown>) : null;
     } catch (err) {
       handleError(err, "resolveDIDOnchain");
       return null;

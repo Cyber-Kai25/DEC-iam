@@ -19,12 +19,20 @@ import { Badge } from "@/components/ui/badge";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const { currentUser, activeRole, clearUserState } = useRole();
+  const { currentUser, activeRole, logout, isLoggingOut } = useRole();
   const router = useRouter();
 
-  const handleLogout = () => {
-    clearUserState();
-    router.push("/");
+  const handleLogout = async () => {
+    try {
+      if (logout) {
+        await logout();
+      }
+      // Redirect to login page
+      router.push("/auth/login");
+    } catch (error) {
+      console.error("[v0] Logout error:", error);
+      router.push("/auth/login");
+    }
   };
 
   return (
@@ -70,9 +78,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 size="sm"
                 className="w-full justify-start text-xs text-muted-foreground"
                 onClick={handleLogout}
+                disabled={isLoggingOut}
               >
                 <LogOut className="h-3 w-3 mr-2" />
-                Logout
+                {isLoggingOut ? "Logging out..." : "Logout"}
               </Button>
             </div>
           )}
@@ -140,9 +149,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleLogout} className="text-red-600">
+                  <DropdownMenuItem 
+                    onClick={handleLogout} 
+                    className="text-red-600"
+                    disabled={isLoggingOut}
+                  >
                     <LogOut className="h-4 w-4 mr-2" />
-                    Logout
+                    {isLoggingOut ? "Logging out..." : "Logout"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

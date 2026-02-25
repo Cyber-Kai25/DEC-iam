@@ -18,15 +18,21 @@ import { useEffect } from "react";
 import Link from "next/link";
 
 export default function LandingPage() {
-  const { isAuthenticated, activeRole } = useRole();
+  const { isAuthenticated, activeRole, currentUser } = useRole();
   const router = useRouter();
 
   // Redirect authenticated users to their dashboard
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && activeRole) {
+      console.log(`[v0] Redirecting authenticated user to ${activeRole}/dashboard`);
       router.push(`/${activeRole}/dashboard`);
+    } else if (isAuthenticated && !activeRole && currentUser) {
+      // Fallback: redirect to first available role if activeRole not set
+      const firstRole = currentUser.roles[0];
+      console.log(`[v0] No activeRole, redirecting to first available: ${firstRole}`);
+      router.push(`/${firstRole}/dashboard`);
     }
-  }, [isAuthenticated, activeRole, router]);
+  }, [isAuthenticated, activeRole, currentUser?.roles.length, router]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">

@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRole } from "@/lib/context/role-context";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import RoleManagementService from "@/lib/services/role-management-service";
-import { ChevronDown, User, Award, CheckCircle2 } from "lucide-react";
+import { ChevronDown, User, Award, CheckCircle2, Loader2 } from "lucide-react";
 
 const roleIcons = {
   owner: User,
@@ -21,10 +24,37 @@ const roleIcons = {
 
 export function RoleSwitcher() {
   const { activeRole, getUserRoles, switchRole } = useRole();
+  const router = useRouter();
+  const [isSwitching, setIsSwitching] = useState(false);
+
+  const handleRoleSwitch = async (newRole: string) => {
+    try {
+      setIsSwitching(true);
+      const success = switchRole(newRole as any);
+      
+      if (!success) {
+        toast.error("Failed to switch role. Please try again.");
+        return;
+      }
+
+      // Redirect to new role dashboard
+      router.push(`/${newRole}/dashboard`);
+      toast.success(`Switched to ${newRole} role`);
+    } catch (error) {
+      console.error("[v0] Role switch error:", error);
+      toast.error("Error switching role");
+    } finally {
+      setIsSwitching(false);
+    }
+  };
 
   const roles = getUserRoles();
   const roleDisplay = RoleManagementService.getRoleDisplayName(activeRole);
   const RoleIcon = roleIcons[activeRole];
+
+  if (roles.length === 0) {
+    return null;
+  }
 
   if (roles.length === 0) {
     return null;
@@ -36,13 +66,15 @@ export function RoleSwitcher() {
         variant="outline"
         size="sm"
         className="gap-2 bg-transparent"
-        asChild
+        disabled={isSwitching}
       >
-        <div>
+        {isSwitching ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
           <RoleIcon className="h-4 w-4" />
-          <span className="hidden sm:inline text-sm">{roleDisplay}</span>
-          <ChevronDown className="h-4 w-4 opacity-50" />
-        </div>
+        )}
+        <span className="hidden sm:inline text-sm">{roleDisplay}</span>
+        <ChevronDown className="h-4 w-4 opacity-50" />
       </Button>
 
       <DropdownMenuContent align="end" className="w-56">
@@ -58,7 +90,8 @@ export function RoleSwitcher() {
           return (
             <DropdownMenuItem
               key={role}
-              onClick={() => switchRole(role)}
+              onClick={() => handleRoleSwitch(role)}
+              disabled={isSwitching || isActive}
               className="flex flex-col items-start gap-1 py-2"
             >
               <div className="flex items-center gap-2">
