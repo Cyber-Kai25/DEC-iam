@@ -100,6 +100,16 @@ export interface VerifiableCredential {
   proof: Proof;
 }
 
+export interface VerifiablePresentation {
+  "@context": string[];
+  id: string;
+  type: string[];
+  holder: string;
+  verifiableCredential: VerifiableCredential[];
+  created: string;
+  proof: Proof;
+}
+
 export interface Proof {
   type: string;
   created: string;

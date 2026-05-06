@@ -3,6 +3,7 @@ import {
   DataExchangeMessage,
   CredentialRequest,
   VerifiableCredential,
+  VerifiablePresentation,
 } from "@/lib/types/did";
 import KeyManagement from "@/lib/crypto/key-management";
 import VerificationService from "@/lib/services/verification-service";
@@ -105,7 +106,7 @@ export class DataExchangeService {
     issuerPrivateKey: string
   ): {
     credentials: VerifiableCredential[];
-    presentation: VerifiableCredential & { verifiableCredential: VerifiableCredential[] };
+    presentation: VerifiablePresentation;
     proofValue: string;
   } {
     // Create a presentation of the requested credentials

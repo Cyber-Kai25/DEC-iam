@@ -3,6 +3,7 @@
 
 import {
   VerifiableCredential,
+  VerifiablePresentation,
   Proof,
   VerificationResult,
   ZKProof,
@@ -271,10 +272,10 @@ export class VerificationService {
     challenge: string,
     privateKey: string
   ): {
-    presentation: VerifiableCredential & { verifiableCredential: VerifiableCredential[] };
+    presentation: VerifiablePresentation;
     proofValue: string;
   } {
-    const presentation = {
+    const presentation: VerifiablePresentation = {
       "@context": [
         "https://www.w3.org/2018/credentials/v1",
         "https://w3id.org/security/suites/secp256k1-2019/v1",
@@ -291,7 +292,7 @@ export class VerificationService {
         created: new Date().toISOString(),
         verificationMethod: `${holderDID}#keys-1`,
       },
-    } as VerifiableCredential & { verifiableCredential: VerifiableCredential[] };
+    };
 
     const proofStr = JSON.stringify(presentation);
     const proofValue = KeyManagement.signMessage(privateKey, proofStr);
@@ -312,7 +313,7 @@ export class VerificationService {
    * Verify a presentation
    */
   static verifyPresentation(
-    presentation: VerifiableCredential & { verifiableCredential: VerifiableCredential[] },
+    presentation: VerifiablePresentation,
     holderAddress: string
   ): VerificationResult {
     if (!presentation.verifiableCredential || presentation.verifiableCredential.length === 0) {
