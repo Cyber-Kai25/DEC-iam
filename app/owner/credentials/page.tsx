@@ -22,7 +22,7 @@ export default function OwnerCredentialsPage() {
   const expiredCredentials = credentials.filter(
     (c) => c.expirationDate && new Date(c.expirationDate) <= new Date()
   );
-  const revokedCredentials = credentials.filter((c) => c.revoked);
+  const revokedCredentials = credentials.filter((c) => (c as any).revoked);
 
   const handleShareCredential = (credentialId: string) => {
     toast.success(`Credential ${credentialId} shared successfully`);

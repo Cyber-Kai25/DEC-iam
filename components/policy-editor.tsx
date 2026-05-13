@@ -22,6 +22,7 @@ interface PolicyEditorProps {
   onSave?: (policy: AccessControlPolicy) => void;
   onAddRule?: (policy: AccessControlPolicy, rule: AccessRule) => void;
   onRemoveRule?: (policy: AccessControlPolicy, ruleId: string) => void;
+  onCancel?: () => void;
 }
 
 export function PolicyEditor({
@@ -29,6 +30,7 @@ export function PolicyEditor({
   onSave,
   onAddRule,
   onRemoveRule,
+  onCancel,
 }: PolicyEditorProps) {
   const [newSubject, setNewSubject] = useState("");
   const [newAction, setNewAction] = useState<
@@ -235,6 +237,11 @@ export function PolicyEditor({
             <Button onClick={() => onSave(policy)} className="flex-1">
               Save Policy
             </Button>
+            {onCancel && (
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
             <Button
               variant="outline"
               onClick={() =>

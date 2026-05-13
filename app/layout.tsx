@@ -41,12 +41,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`}>
-        <IdentityProvider>
-          <RoleProvider>
+        <RoleProvider>
+          <IdentityProvider>
             {children}
             <Toaster />
-          </RoleProvider>
-        </IdentityProvider>
+          </IdentityProvider>
+        </RoleProvider>
         <Analytics />
       </body>
     </html>

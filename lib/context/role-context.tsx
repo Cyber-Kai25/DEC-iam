@@ -9,10 +9,10 @@ interface RoleContextType {
   // User management
   currentUser: User | null;
   isAuthenticated: boolean;
-  setCurrentUser: (user: User | null) => void;
+  setCurrentUser: (user: User) => void;
 
   // Role management
-  activeRole: UserRole | null;
+  activeRole: UserRole;
   switchRole: (role: UserRole) => boolean;
   hasRole: (role: UserRole) => boolean;
   hasPermission: (action: string) => boolean;
@@ -20,7 +20,7 @@ interface RoleContextType {
 
   // Organization management
   activeOrganization: Organization | null;
-  setActiveOrganization: (org: Organization | null) => void;
+  setActiveOrganization: (org: Organization) => void;
   organizations: Organization[];
   addOrganization: (org: Organization) => void;
 
@@ -41,7 +41,7 @@ const RoleContext = createContext<RoleContextType | undefined>(undefined);
 
 export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeRole, setActiveRole] = useState<UserRole | null>(null);
+  const [activeRole, setActiveRole] = useState<UserRole>("owner");
   const [activeOrganization, setActiveOrganization] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -143,7 +143,6 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   };
 
   const getRoleNavigation = () => {
-    if (!activeRole) return [];
     return RoleManagementService.getNavigationItems(activeRole);
   };
 
@@ -205,7 +204,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.removeItem("role-app-state");
       setCurrentUser(null);
-      setActiveRole(null);
+      setActiveRole("owner");
       setActiveOrganization(null);
       setOrganizations([]);
       console.log("[v0] User state cleared");

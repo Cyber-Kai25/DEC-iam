@@ -36,7 +36,7 @@ export class KeyManagement {
   ): string | null {
     try {
       const messageHash = ethers.hashMessage(message);
-      const publicKey = ethers.recoverPublicKey(messageHash, signature);
+      const publicKey = ethers.SigningKey.recoverPublicKey(messageHash, signature);
       return publicKey;
     } catch {
       return null;

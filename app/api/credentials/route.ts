@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthContext } from '@/lib/middleware/auth';
 import { RBACService } from '@/lib/services/rbac-service';
 import VerificationService from '@/lib/services/verification-service';
+import SupabaseRepository from '@/lib/services/supabase-repository';
+import BlockchainService from '@/lib/services/blockchain-service';
+import { ethers } from 'ethers';
 
 /**
  * GET /api/credentials
- * List credentials (varies by role)
+ * List credentials from Supabase (varies by role)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -18,39 +21,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Role-specific credential retrieval
-    let credentials = [];
-
-    if (auth.activeRole === 'owner') {
-      // Owners see credentials issued to them
-      credentials = [
-        {
-          id: `cred_1`,
-          subjectDid: `did:ethr:11155111:${auth.userId}`,
-          type: 'UniversityDegree',
-          status: 'active',
-          issuedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-          issuer: 'did:ethr:11155111:0x1234567890123456789012345678901234567890',
-        },
-      ];
-    } else if (auth.activeRole === 'issuer') {
-      // Issuers see credentials they issued
-      credentials = [
-        {
-          id: `cred_issued_1`,
-          subjectDid: 'did:ethr:11155111:0x9999999999999999999999999999999999999999',
-          type: 'VerifiedEmail',
-          status: 'active',
-          issuedAt: new Date(),
-          expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-          issuerDid: `did:ethr:11155111:${auth.userId}`,
-        },
-      ];
-    } else if (auth.activeRole === 'verifier') {
-      // Verifiers see credentials they verified
-      credentials = [];
+    // Check permission
+    const hasPermission = RBACService.getRolePermissions(auth.activeRole).includes('credential:read');
+    if (!hasPermission) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: No permission to read credentials' },
+        { status: 403 }
+      );
     }
+
+    // Fetch credentials from Supabase (role-specific)
+    const credentials = await SupabaseRepository.getCredentials(auth.userId, auth.activeRole);
 
     console.log('[v0] Fetched credentials for user:', { userId: auth.userId, role: auth.activeRole, count: credentials.length });
 
@@ -91,7 +72,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { subjectDid, credentialType, claims } = body;
+    const { subjectDid, credentialType, claims, expirationDays } = body;
 
     if (!subjectDid || !credentialType) {
       return NextResponse.json(
@@ -101,24 +82,83 @@ export async function POST(request: NextRequest) {
     }
 
     // Create verifiable credential
+    const issuanceDate = new Date();
+    const expirationDate = new Date(issuanceDate.getTime() + (expirationDays || 365) * 24 * 60 * 60 * 1000);
+    
     const credential = {
+      "@context": ["https://www.w3.org/2018/credentials/v1"],
       id: `cred_${Date.now()}`,
-      subjectDid,
-      type: credentialType,
-      claims: claims || {},
-      status: 'active',
-      issuedAt: new Date(),
-      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-      issuerDid: `did:ethr:11155111:${auth.userId}`,
-      signature: 'mock_signature_' + Math.random().toString(36).substr(2, 9),
+      type: Array.isArray(credentialType)
+        ? credentialType
+        : ["VerifiableCredential", credentialType],
+      issuer: `did:ethr:11155111:${auth.userId}`,
+      issuanceDate: issuanceDate.toISOString(),
+      expirationDate: expirationDate.toISOString(),
+      credentialSubject: {
+        id: subjectDid,
+        ...claims,
+      },
+      proof: {
+        type: 'Ed25519Signature2018',
+        created: issuanceDate.toISOString(),
+        verificationMethod: `did:ethr:11155111:${auth.userId}#key-1`,
+      },
     };
 
-    console.log('[v0] Issued credential:', { credentialId: credential.id, type: credentialType });
+    // === DUAL-WRITE PATTERN ===
+    // 1. Hash credential for blockchain anchoring
+    const credentialHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(credential)));
+    console.log('[v0] Credential hash created:', credentialHash.slice(0, 16));
 
+    // 2. Save to Supabase (fast, queryable)
+    const savedCredential = await SupabaseRepository.saveCredential(credential, auth.userId);
+    
+    if (!savedCredential) {
+      return NextResponse.json(
+        { success: false, error: 'Failed to persist credential to database' },
+        { status: 500 }
+      );
+    }
+
+    console.log('[v0] Credential saved to Supabase:', { credentialId: savedCredential.id, type: credentialType });
+
+    // 3. Anchor to blockchain (immutable, verifiable)
+    let blockchainTx = null;
+    try {
+      blockchainTx = await BlockchainService.issueCredentialOnChain(
+        credentialHash,
+        auth.userId,
+        subjectDid,
+        expirationDays || 365
+      );
+      
+      console.log('[v0] Credential anchored to blockchain:', { 
+        hash: credentialHash.slice(0, 16),
+        tx: blockchainTx.hash.slice(0, 16),
+        network: 'Sepolia'
+      });
+    } catch (blockchainError) {
+      console.warn('[v0] Blockchain anchoring failed (non-blocking):', blockchainError);
+      // Don't fail the entire operation if blockchain write fails
+      // The credential is still valid in Supabase
+    }
+
+    // 4. Return with both references
     return NextResponse.json(
       {
         success: true,
-        data: credential,
+        data: {
+          ...savedCredential,
+          blockchain: blockchainTx ? {
+            transactionHash: blockchainTx.hash,
+            credentialHash: credentialHash,
+            chainId: blockchainTx.chainId,
+            network: 'Sepolia',
+            status: blockchainTx.status,
+            explorer: BlockchainService.getTransactionURL(blockchainTx.hash),
+          } : null,
+        },
+        message: 'Credential issued and persisted (Supabase + ' + (blockchainTx ? 'Blockchain)' : 'Blockchain pending)'),
       },
       { status: 201 }
     );

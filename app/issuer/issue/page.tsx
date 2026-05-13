@@ -41,13 +41,14 @@ export default function IssuerIssuePage() {
     }
 
     try {
-      createCredential({
-        type: [formData.credentialType],
-        issuer: "issuer-did",
-        subject: formData.subject,
-        issuanceDate: new Date(),
-        expirationDate: formData.expirationDate ? new Date(formData.expirationDate) : undefined,
-      });
+      await createCredential(
+        formData.recipientDID,
+        formData.credentialType,
+        formData.subject,
+        formData.expirationDate
+          ? Math.ceil((new Date(formData.expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+          : undefined,
+      );
 
       toast.success("Credential issued successfully");
       setFormData({

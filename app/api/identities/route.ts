@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthContext } from '@/lib/middleware/auth';
 import DIDService from '@/lib/services/did-service';
 import { RBACService } from '@/lib/services/rbac-service';
+import SupabaseRepository from '@/lib/services/supabase-repository';
 
 /**
  * GET /api/identities
- * List user's identities (role-based filtering)
+ * List user's identities from Supabase (role-based filtering)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -27,24 +28,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // In production, fetch from Supabase
-    // For now, return mock identities
-    const mockIdentities = [
-      {
-        id: `identity_${auth.userId}_1`,
-        did: `did:ethr:11155111:${auth.userId}`,
-        walletAddress: `0x${Math.random().toString(16).slice(2, 42).padEnd(40, '0')}`,
-        createdAt: new Date(),
-        name: 'My Primary Identity',
-        role: auth.activeRole,
-      },
-    ];
+    // Fetch identities from Supabase
+    const identities = await SupabaseRepository.getUserIdentities(auth.userId);
 
-    console.log('[v0] Fetched identities for user:', { userId: auth.userId, count: mockIdentities.length });
+    console.log('[v0] Fetched identities for user:', { userId: auth.userId, count: identities.length });
 
     return NextResponse.json({
       success: true,
-      data: mockIdentities,
+      data: identities,
     });
   } catch (error) {
     console.error('[v0] Get identities error:', error);
@@ -90,21 +81,36 @@ export async function POST(request: NextRequest) {
     }
 
     // Create new identity using DIDService
-    const identity = DIDService.generateDID();
+    const identity = DIDService.createIdentity(name);
+    
+    // Attach metadata
+    const identityWithMetadata = {
+      ...identity,
+      name,
+      description,
+      metadata: {
+        userId: auth.userId,
+        role: auth.activeRole,
+        createdAt: new Date().toISOString(),
+      },
+    };
 
-    console.log('[v0] Created identity for user:', { userId: auth.userId, did: identity.did });
+    // Save to Supabase database - CRITICAL: Persist to DB
+    const savedIdentity = await SupabaseRepository.saveIdentity(identityWithMetadata, auth.userId);
+    
+    if (!savedIdentity) {
+      return NextResponse.json(
+        { success: false, error: 'Failed to persist identity to database' },
+        { status: 500 }
+      );
+    }
+
+    console.log('[v0] Created and saved identity to Supabase:', { userId: auth.userId, did: savedIdentity.did });
 
     return NextResponse.json(
       {
         success: true,
-        data: {
-          id: `identity_${auth.userId}_${Date.now()}`,
-          ...identity,
-          name,
-          description,
-          role: auth.activeRole,
-          createdAt: new Date(),
-        },
+        data: savedIdentity,
       },
       { status: 201 }
     );

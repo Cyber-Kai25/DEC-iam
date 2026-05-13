@@ -34,10 +34,10 @@ export function CredentialCard({
       )
     : null;
 
-  const credentialType = Array.isArray(credential.type)
+  const credentialType: string = Array.isArray(credential.type)
     ? credential.type.find((t) => t !== "VerifiableCredential") ||
       credential.type[0]
-    : credential.type;
+    : String(credential.type);
 
   return (
     <Card className="w-full hover:shadow-lg transition-shadow">
@@ -78,7 +78,7 @@ export function CredentialCard({
         </div>
 
         {/* Subject */}
-        {credential.credentialSubject?.id && (
+        {!!credential.credentialSubject?.id && (
           <div className="space-y-2">
             <label className="text-xs font-semibold text-muted-foreground uppercase">
               Subject

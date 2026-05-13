@@ -12,6 +12,8 @@ import VerificationService from "@/lib/services/verification-service";
 import AccessControlService from "@/lib/services/access-control-service";
 import DataExchangeService from "@/lib/services/data-exchange-service";
 import BlockchainService from "@/lib/services/blockchain-service";
+import SupabaseRepository from "@/lib/services/supabase-repository";
+import { ethers } from "ethers";
 
 interface IdentityContextType {
   // Current Identity
@@ -76,6 +78,7 @@ interface IdentityContextType {
 const IdentityContext = createContext<IdentityContextType | undefined>(undefined);
 
 export function IdentityProvider({ children }: { children: React.ReactNode }) {
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentIdentity, setCurrentIdentity] = useState<Identity | null>(null);
   const [credentials, setCredentials] = useState<VerifiableCredential[]>([]);
   const [policies, setPolicies] = useState<AccessControlPolicy[]>([]);
@@ -92,10 +95,34 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     initBlockchain();
   }, []);
 
-  // Load from local storage on mount
+  // Detect user from localStorage (set by RoleProvider)
   useEffect(() => {
-    loadFromLocalStorage();
-  }, []);
+    const checkUserState = async () => {
+      try {
+        const stored = localStorage.getItem("role-app-state");
+        if (stored) {
+          const state = JSON.parse(stored);
+          if (state.user?.id && state.user.id !== currentUserId) {
+            setCurrentUserId(state.user.id);
+          }
+        }
+      } catch (err) {
+        console.error("[v0] Error checking user state:", err);
+      }
+    };
+
+    checkUserState();
+    // Check every second if user has changed
+    const interval = setInterval(checkUserState, 1000);
+    return () => clearInterval(interval);
+  }, [currentUserId]);
+
+  // Load from Supabase when user ID changes
+  useEffect(() => {
+    if (currentUserId) {
+      loadFromSupabase(currentUserId);
+    }
+  }, [currentUserId]);
 
   const handleError = (err: unknown, context: string) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -110,13 +137,21 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       setError(null);
 
       const identity = DIDService.createIdentity(name);
-      setCurrentIdentity(identity);
+      
+      // Save to Supabase if user is authenticated
+      let savedIdentity = identity;
+      if (currentUserId) {
+        savedIdentity = await SupabaseRepository.saveIdentity(identity, currentUserId) || identity;
+        console.log("[v0] Identity saved to Supabase:", { did: savedIdentity.did, userId: currentUserId });
+      }
+
+      setCurrentIdentity(savedIdentity);
 
       const newIdentities = new Map(identities);
-      newIdentities.set(identity.id, identity);
+      newIdentities.set(savedIdentity.id, savedIdentity);
       setIdentities(newIdentities);
 
-      return identity;
+      return savedIdentity;
     } catch (err) {
       handleError(err, "createIdentity");
       return null;
@@ -245,8 +280,28 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         expirationDays || 365
       );
 
-      setCredentials([...credentials, credential]);
-      return credential;
+      // Save to Supabase if user is authenticated
+      let savedCredential = credential;
+      if (currentUserId) {
+        savedCredential = await SupabaseRepository.saveCredential(credential, currentUserId) || credential;
+        console.log("[v0] Credential saved to Supabase:", { credentialId: savedCredential.id, userId: currentUserId });
+      }
+
+      try {
+        const credentialHash = ethers.keccak256(
+          ethers.toUtf8Bytes(JSON.stringify(savedCredential))
+        );
+        const tx = await BlockchainService.anchorAuditHashWithWallet(
+          credentialHash,
+          "credential"
+        );
+        console.log("[v0] Credential audit anchor tx:", tx.hash);
+      } catch (err) {
+        console.warn("[v0] Audit anchoring failed (non-blocking):", err);
+      }
+
+      setCredentials([...credentials, savedCredential]);
+      return savedCredential;
     } catch (err) {
       handleError(err, "createCredential");
       return null;
@@ -267,6 +322,15 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
   const revokeCredential = async (credentialId: string): Promise<boolean> => {
     try {
+      // Revoke in Supabase if user is authenticated
+      if (currentUserId) {
+        const success = await SupabaseRepository.revokeCredential(credentialId);
+        if (!success) {
+          console.warn("[v0] Failed to revoke credential in Supabase:", credentialId);
+          return false;
+        }
+      }
+      
       setCredentials(credentials.filter((c) => c.id !== credentialId));
       return true;
     } catch (err) {
@@ -296,8 +360,15 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         currentIdentity.did
       );
 
-      setPolicies([...policies, policy]);
-      return policy;
+      // Save to Supabase if user is authenticated
+      let savedPolicy = policy;
+      if (currentUserId) {
+        savedPolicy = await SupabaseRepository.savePolicy(policy, currentUserId) || policy;
+        console.log("[v0] Policy saved to Supabase:", { policyId: savedPolicy.id, userId: currentUserId });
+      }
+
+      setPolicies([...policies, savedPolicy]);
+      return savedPolicy;
     } catch (err) {
       handleError(err, "createPolicy");
       return null;
@@ -469,8 +540,40 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       };
 
       localStorage.setItem("identity-app-state", JSON.stringify(data));
+      console.log("[v0] Identity data saved to localStorage");
     } catch (err) {
       handleError(err, "saveToLocalStorage");
+    }
+  };
+
+  const loadFromSupabase = async (userId: string) => {
+    try {
+      setIsLoading(true);
+
+      // Load identities from Supabase
+      const userIdentities = await SupabaseRepository.getUserIdentities(userId);
+      if (userIdentities.length > 0) {
+        const identityMap = new Map(userIdentities.map((id) => [id.id, id]));
+        setIdentities(identityMap);
+        setCurrentIdentity(userIdentities[0]); // Set first identity as current
+        console.log("[v0] Loaded identities from Supabase:", { count: userIdentities.length });
+
+        // Load credentials
+        const allCredentials = await SupabaseRepository.getCredentials(userId, "owner");
+        setCredentials(allCredentials);
+        console.log("[v0] Loaded credentials from Supabase:", { count: allCredentials.length });
+
+        // Load policies
+        if (userIdentities[0]) {
+          const allPolicies = await SupabaseRepository.getPolicies(userIdentities[0].did);
+          setPolicies(allPolicies);
+          console.log("[v0] Loaded policies from Supabase:", { count: allPolicies.length });
+        }
+      }
+    } catch (err) {
+      handleError(err, "loadFromSupabase");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -490,6 +593,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         if (data.identities) {
           setIdentities(new Map(data.identities));
         }
+        console.log("[v0] Loaded identity data from localStorage");
       }
     } catch (err) {
       handleError(err, "loadFromLocalStorage");
@@ -506,6 +610,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       setPolicies([]);
       setMessages([]);
       setIdentities(new Map());
+      console.log("[v0] Cleared identity data from localStorage");
     } catch (err) {
       handleError(err, "clearLocalStorage");
     }

@@ -384,7 +384,7 @@ export class AccessControlService {
         rules: data.rules.map(
           (rule: Record<string, unknown>) => ({
             ...rule,
-            expiresAt: rule.expiresAt ? new Date(rule.expiresAt) : undefined,
+            expiresAt: rule.expiresAt ? new Date(rule.expiresAt as string | number) : undefined,
           })
         ),
       };

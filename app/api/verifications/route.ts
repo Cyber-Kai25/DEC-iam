@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    let verifications = [];
+    let verifications: Record<string, unknown>[] = [];
 
     if (auth.activeRole === 'owner') {
       // Owners see verification requests they've received

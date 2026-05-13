@@ -139,6 +139,16 @@ export interface AccessControlPolicy {
   createdAt: Date;
   updatedAt: Date;
   active: boolean;
+  // Consent tracking fields
+  requiresConsent?: boolean;
+  consentRecords?: ConsentRecord[];
+  consentHistory?: ConsentAuditEntry[];
+  // Revocation integration
+  revocationEnabled?: boolean;
+  revocationRegistry?: string; // Reference to revocation registry
+  // Data lifecycle
+  dataRetention?: DataRetention;
+  lifecycleEvents?: DataLifecycleEvent[];
 }
 
 export interface AccessRule {
@@ -222,4 +232,83 @@ export interface DIDRegistry {
   updated: Date;
   active: boolean;
   transactionHash: string;
+}
+
+// Consent Management Types
+export type ConsentStatus = "pending" | "granted" | "denied" | "revoked" | "expired";
+export type ConsentType = "credential-sharing" | "data-processing" | "verification" | "analytics" | "marketing";
+
+export interface ConsentRecord {
+  id: string;
+  userId: string;
+  dataControllerDid: string;
+  consentType: ConsentType;
+  description: string;
+  status: ConsentStatus;
+  scope: string[]; // Which attributes are covered
+  purposes: string[]; // Why the data is being processed
+  grantedAt?: Date;
+  expiresAt: Date;
+  revokedAt?: Date;
+  auditLog: ConsentAuditEntry[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConsentAuditEntry {
+  id: string;
+  timestamp: Date;
+  action: "created" | "granted" | "denied" | "revoked" | "accessed";
+  actor: string; // DID of who made the change
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// Revocation Registry Types
+export type RevocationType = "credential" | "identity" | "consent" | "policy";
+export type RevocationReason = "user-request" | "expired" | "compromised" | "authority-decision" | "data-breach";
+
+export interface RevocationRecord {
+  id: string;
+  resourceId: string; // Credential ID, DID, etc.
+  resourceType: RevocationType;
+  revocationReason: RevocationReason;
+  revokedBy: string; // DID of who initiated revocation
+  revokedAt: Date;
+  effectiveAt: Date;
+  blockchainTxHash?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RevocationRegistry {
+  id: string;
+  registryAddress?: string; // Smart contract address if on-chain
+  revokedItems: RevocationRecord[];
+  createdAt: Date;
+  updatedAt: Date;
+  issuerId: string;
+}
+
+// Data Lifecycle Management Types
+export type DataLifecycleStage = "collection" | "processing" | "storage" | "sharing" | "deletion";
+export type DataRetentionPolicy = "short-term" | "medium-term" | "long-term" | "permanent" | "until-revoked";
+
+export interface DataLifecycleEvent {
+  id: string;
+  credentialId: string;
+  stage: DataLifecycleStage;
+  timestamp: Date;
+  actor: string; // DID of who performed action
+  action: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DataRetention {
+  id: string;
+  resourceId: string;
+  resourceType: string;
+  retentionPolicy: DataRetentionPolicy;
+  retentionPeriodDays?: number;
+  createdAt: Date;
+  willExpireAt?: Date;
+  autoDeleteAt?: Date;
 }

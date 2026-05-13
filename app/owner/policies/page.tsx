@@ -11,11 +11,23 @@ import { PolicyEditor } from "@/components/policy-editor";
 import { Plus, Shield, Edit2, Trash2, ToggleLeft as Toggle2On, ToggleLeft as Toggle2Off } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AccessControlPolicy } from "@/lib/types/did";
 
 export default function OwnerPoliciesPage() {
   const { policies, createPolicy } = useIdentity();
   const [showEditor, setShowEditor] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<typeof policies[0] | null>(null);
+
+  const emptyPolicy: AccessControlPolicy = {
+    id: `policy_${Date.now()}`,
+    resourceId: "",
+    resourceType: "credential",
+    owner: "",
+    rules: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    active: true,
+  };
 
   const activePolicies = policies.filter((p) => p.active);
   const inactivePolicies = policies.filter((p) => !p.active);
@@ -137,7 +149,7 @@ export default function OwnerPoliciesPage() {
               </CardHeader>
               <CardContent>
                 <PolicyEditor
-                  policy={editingPolicy || undefined}
+                  policy={editingPolicy || emptyPolicy}
                   onSave={(policy) => {
                     toast.success(
                       editingPolicy ? "Policy updated" : "Policy created"
