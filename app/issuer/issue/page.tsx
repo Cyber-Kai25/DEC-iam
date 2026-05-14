@@ -21,9 +21,10 @@ export default function IssuerIssuePage() {
   const [formData, setFormData] = useState({
     recipientDID: "",
     credentialType: "EducationCredential",
-    subject: {},
+    subjectJson: "{}",
     expirationDate: "",
   });
+  const [isSubjectJsonValid, setIsSubjectJsonValid] = useState(true);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -40,11 +41,21 @@ export default function IssuerIssuePage() {
       return;
     }
 
+    let subject: Record<string, unknown>;
+    try {
+      subject = formData.subjectJson?.trim()
+        ? (JSON.parse(formData.subjectJson) as Record<string, unknown>)
+        : {};
+    } catch {
+      toast.error("Subject Data must be valid JSON");
+      return;
+    }
+
     try {
       await createCredential(
         formData.recipientDID,
         formData.credentialType,
-        formData.subject,
+        subject,
         formData.expirationDate
           ? Math.ceil((new Date(formData.expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
           : undefined,
@@ -54,7 +65,7 @@ export default function IssuerIssuePage() {
       setFormData({
         recipientDID: "",
         credentialType: "EducationCredential",
-        subject: {},
+        subjectJson: "{}",
         expirationDate: "",
       });
     } catch (error) {
@@ -121,17 +132,34 @@ export default function IssuerIssuePage() {
                     placeholder='{"name": "John Doe", "institution": "University"}'
                     className="font-mono text-xs"
                     rows={6}
+                    value={formData.subjectJson}
                     onChange={(e) => {
-                      try {
-                        setFormData((prev) => ({
-                          ...prev,
-                          subject: JSON.parse(e.target.value),
-                        }));
-                      } catch {
-                        // Invalid JSON, ignore
+                      const next = e.target.value;
+                      if (!next.trim()) {
+                        setIsSubjectJsonValid(true);
+                      } else {
+                        try {
+                          JSON.parse(next);
+                          setIsSubjectJsonValid(true);
+                        } catch {
+                          setIsSubjectJsonValid(false);
+                        }
                       }
+                      setFormData((prev) => ({
+                        ...prev,
+                        subjectJson: next,
+                      }));
                     }}
                   />
+                  <p
+                    className={`text-xs ${
+                      isSubjectJsonValid
+                        ? "text-muted-foreground"
+                        : "text-destructive"
+                    }`}
+                  >
+                    {isSubjectJsonValid ? "Valid JSON" : "Invalid JSON"}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     The claims and attributes in this credential
                   </p>
@@ -164,7 +192,7 @@ export default function IssuerIssuePage() {
                       setFormData({
                         recipientDID: "",
                         credentialType: "EducationCredential",
-                        subject: {},
+                        subjectJson: "{}",
                         expirationDate: "",
                       })
                     }

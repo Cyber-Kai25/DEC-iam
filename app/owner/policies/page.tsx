@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { AccessControlPolicy } from "@/lib/types/did";
 
 export default function OwnerPoliciesPage() {
-  const { policies, createPolicy } = useIdentity();
+  const { policies, createPolicy, updatePolicy, deletePolicy } = useIdentity();
   const [showEditor, setShowEditor] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<typeof policies[0] | null>(null);
 
@@ -43,11 +43,32 @@ export default function OwnerPoliciesPage() {
   };
 
   const handleTogglePolicy = (policyId: string) => {
-    toast.info("Policy status updated");
+    const policy = policies.find((p) => p.id === policyId);
+    if (!policy) {
+      toast.error("Policy not found");
+      return;
+    }
+
+    updatePolicy({
+      ...policy,
+      active: !policy.active,
+    }).then((saved) => {
+      if (!saved) {
+        toast.error("Failed to update policy");
+        return;
+      }
+      toast.success("Policy status updated");
+    });
   };
 
   const handleDeletePolicy = (policyId: string) => {
-    toast.info("Policy deleted");
+    deletePolicy(policyId).then((ok) => {
+      if (!ok) {
+        toast.error("Failed to delete policy");
+        return;
+      }
+      toast.success("Policy deleted");
+    });
   };
 
   const PolicyCard = ({ policy }: { policy: (typeof policies)[0] }) => (
@@ -151,11 +172,21 @@ export default function OwnerPoliciesPage() {
                 <PolicyEditor
                   policy={editingPolicy || emptyPolicy}
                   onSave={(policy) => {
-                    toast.success(
-                      editingPolicy ? "Policy updated" : "Policy created"
-                    );
-                    setShowEditor(false);
-                    setEditingPolicy(null);
+                    const op = editingPolicy
+                      ? updatePolicy(policy)
+                      : createPolicy(policy.resourceId, policy.resourceType);
+
+                    op.then((saved) => {
+                      if (!saved) {
+                        toast.error("Failed to save policy");
+                        return;
+                      }
+                      toast.success(
+                        editingPolicy ? "Policy updated" : "Policy created"
+                      );
+                      setShowEditor(false);
+                      setEditingPolicy(null);
+                    });
                   }}
                   onCancel={() => {
                     setShowEditor(false);

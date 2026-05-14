@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthContext } from '@/lib/middleware/auth';
 import { RBACService } from '@/lib/services/rbac-service';
+import SupabaseRepository from '@/lib/services/supabase-repository';
+import { ethers } from 'ethers';
 
 /**
  * GET /api/verifications
@@ -17,34 +19,31 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    let verifications: Record<string, unknown>[] = [];
-
-    if (auth.activeRole === 'owner') {
-      // Owners see verification requests they've received
-      verifications = [
-        {
-          id: 'vreq_1',
-          verifierDid: 'did:ethr:11155111:0x2222222222222222222222222222222222222222',
-          verifierName: 'Acme Corp Verifier',
-          requestedCredentials: ['UniversityDegree'],
-          status: 'pending',
-          createdAt: new Date(),
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        },
-      ];
-    } else if (auth.activeRole === 'verifier') {
-      // Verifiers see verification requests they created
-      verifications = [
-        {
-          id: 'vreq_created_1',
-          subjectDid: 'did:ethr:11155111:0x3333333333333333333333333333333333333333',
-          requestedCredentials: ['VerifiedEmail', 'ProofOfKYC'],
-          status: 'pending',
-          createdAt: new Date(),
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        },
-      ];
+    const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+    const did = identities[0]?.did;
+    if (!did) {
+      return NextResponse.json({ success: true, data: [] });
     }
+
+    const direction = auth.activeRole === 'owner' ? 'inbox' : 'outbox';
+    const messages = await SupabaseRepository.getDataExchangeMessagesForDid(
+      did,
+      direction
+    );
+
+    const verifications = messages
+      .filter((m) => !!m.credentialRequest)
+      .map((m) => ({
+        id: m.id,
+        verifierDid: m.from,
+        subjectDid: m.to,
+        requestedCredentials: m.credentialRequest?.credentialTypes || [],
+        challenge: m.credentialRequest?.challenge,
+        status: m.status,
+        createdAt: m.timestamp,
+        expiresAt: m.expiresAt,
+        responsePayload: m.encryptedData,
+      }));
 
     console.log('[v0] Fetched verifications for user:', { userId: auth.userId, role: auth.activeRole, count: verifications.length });
 
@@ -77,7 +76,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { action, subjectDid, requestedCredentials, response, requestId } = body;
+    const { action, subjectDid, requestedCredentials, response, requestId, presentation } = body;
 
     if (action === 'create' && auth.activeRole === 'verifier') {
       // Create verification request
@@ -88,20 +87,54 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const verification = {
-        id: `vreq_${Date.now()}`,
-        verifierDid: `did:ethr:11155111:${auth.userId}`,
-        subjectDid,
-        requestedCredentials,
-        status: 'pending',
-        createdAt: new Date(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+      const verifierDid = identities[0]?.did;
+      if (!verifierDid) {
+        return NextResponse.json(
+          { success: false, error: 'No verifier identity found' },
+          { status: 400 }
+        );
+      }
+
+      const now = new Date();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const challenge = ethers.hexlify(ethers.randomBytes(16));
+      const credentialRequest = {
+        id: `urn:uuid:${crypto.randomUUID()}`,
+        requesterId: verifierDid,
+        credentialTypes: requestedCredentials,
+        challenge,
+        createdAt: now,
+        expiresAt,
       };
 
-      console.log('[v0] Created verification request:', { requestId: verification.id });
+      const payload = JSON.stringify({ kind: 'verification-request', credentialRequest });
+      const message = {
+        id: `vreq_${Date.now()}`,
+        from: verifierDid,
+        to: subjectDid,
+        dataHash: ethers.keccak256(ethers.toUtf8Bytes(payload)),
+        encryptedData: payload,
+        encryptionAlgorithm: 'none',
+        nonce: ethers.hexlify(ethers.randomBytes(8)),
+        timestamp: now,
+        expiresAt,
+        credentialRequest,
+        status: 'pending' as const,
+      };
+
+      const saved = await SupabaseRepository.saveDataExchangeMessage(message);
+      if (!saved) {
+        return NextResponse.json(
+          { success: false, error: 'Failed to persist verification request' },
+          { status: 500 }
+        );
+      }
+
+      console.log('[v0] Created verification request:', { requestId: saved.id });
 
       return NextResponse.json(
-        { success: true, data: verification },
+        { success: true, data: saved },
         { status: 201 }
       );
     } else if (action === 'respond' && auth.activeRole === 'owner') {
@@ -113,15 +146,32 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const nextStatus = response === 'approved' ? 'accepted' : 'rejected';
+      const responsePayload = JSON.stringify({
+        kind: 'verification-response',
+        response,
+        respondedAt: new Date().toISOString(),
+        presentation: presentation || null,
+      });
+
+      const updated = await SupabaseRepository.updateDataExchangeMessageStatus(
+        requestId,
+        nextStatus,
+        responsePayload
+      );
+
+      if (!updated) {
+        return NextResponse.json(
+          { success: false, error: 'Failed to persist verification response' },
+          { status: 500 }
+        );
+      }
+
       console.log('[v0] Owner responded to verification:', { requestId, response });
 
       return NextResponse.json({
         success: true,
-        data: {
-          requestId,
-          response,
-          respondedAt: new Date(),
-        },
+        data: updated,
       });
     } else {
       return NextResponse.json(

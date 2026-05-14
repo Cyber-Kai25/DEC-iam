@@ -11,12 +11,16 @@ interface CredentialCardProps {
   credential: VerifiableCredential;
   onVerify?: (credential: VerifiableCredential) => void;
   onRevoke?: (credentialId: string) => void;
+  onDownload?: (credential: VerifiableCredential) => void;
+  onPresent?: (credential: VerifiableCredential) => void;
 }
 
 export function CredentialCard({
   credential,
   onVerify,
   onRevoke,
+  onDownload,
+  onPresent,
 }: CredentialCardProps) {
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -184,6 +188,26 @@ export function CredentialCard({
             >
               <CheckCircle className="w-4 h-4 mr-2" />
               Verify
+            </Button>
+          )}
+          {onDownload && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onDownload(credential)}
+              className="flex-1"
+            >
+              Download
+            </Button>
+          )}
+          {onPresent && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onPresent(credential)}
+              className="flex-1"
+            >
+              Present
             </Button>
           )}
           {onRevoke && (

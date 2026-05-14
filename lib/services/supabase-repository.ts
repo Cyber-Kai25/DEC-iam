@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
-import { Identity, VerifiableCredential, AccessControlPolicy, ConsentRecord, RevocationRecord, RevocationRegistry, DataRetention, DataLifecycleEvent } from "@/lib/types/did";
+import { Identity, VerifiableCredential, AccessControlPolicy, ConsentRecord, RevocationRecord, RevocationRegistry, DataRetention, DataLifecycleEvent, DataExchangeMessage, CredentialRequest } from "@/lib/types/did";
 
 /**
  * Supabase Repository Service
@@ -8,6 +8,92 @@ import { Identity, VerifiableCredential, AccessControlPolicy, ConsentRecord, Rev
 export class SupabaseRepository {
   private static async getClient() {
     return createClient();
+  }
+
+  // ============================================================================
+  // DATA EXCHANGE MESSAGES (Verification Requests)
+  // ============================================================================
+
+  static async saveDataExchangeMessage(
+    message: DataExchangeMessage
+  ): Promise<DataExchangeMessage | null> {
+    try {
+      const supabase = await this.getClient();
+      const { data, error } = await supabase
+        .from("data_exchange_messages")
+        .upsert(
+          {
+            message_id: message.id,
+            from_did: message.from,
+            to_did: message.to,
+            data_hash: message.dataHash,
+            encrypted_data: message.encryptedData,
+            encryption_algorithm: message.encryptionAlgorithm,
+            nonce: message.nonce,
+            status: message.status,
+            credential_request: (message.credentialRequest || null) as unknown as Record<
+              string,
+              unknown
+            >,
+            expires_at: message.expiresAt ? new Date(message.expiresAt) : null,
+            read_at: null,
+          },
+          { onConflict: "message_id" }
+        )
+        .select()
+        .single();
+
+      if (error || !data) return null;
+      return this.mapDataExchangeMessageFromDB(data);
+    } catch {
+      return null;
+    }
+  }
+
+  static async getDataExchangeMessagesForDid(
+    did: string,
+    direction: "inbox" | "outbox" = "inbox"
+  ): Promise<DataExchangeMessage[]> {
+    try {
+      const supabase = await this.getClient();
+      let query = supabase.from("data_exchange_messages").select("*");
+      query =
+        direction === "inbox"
+          ? query.eq("to_did", did)
+          : query.eq("from_did", did);
+
+      const { data, error } = await query.order("created_at", { ascending: false });
+      if (error || !data) return [];
+      return (data || []).map((row: any) => this.mapDataExchangeMessageFromDB(row));
+    } catch {
+      return [];
+    }
+  }
+
+  static async updateDataExchangeMessageStatus(
+    messageId: string,
+    status: DataExchangeMessage["status"],
+    encryptedData?: string
+  ): Promise<DataExchangeMessage | null> {
+    try {
+      const supabase = await this.getClient();
+      const update: Record<string, unknown> = { status };
+      if (encryptedData !== undefined) {
+        update.encrypted_data = encryptedData;
+      }
+
+      const { data, error } = await supabase
+        .from("data_exchange_messages")
+        .update(update)
+        .eq("message_id", messageId)
+        .select()
+        .single();
+
+      if (error || !data) return null;
+      return this.mapDataExchangeMessageFromDB(data);
+    } catch {
+      return null;
+    }
   }
 
   // ============================================================================
@@ -22,7 +108,6 @@ export class SupabaseRepository {
         .from("identities")
         .upsert(
           {
-            id: identity.id,
             did: identity.did,
             wallet_address: identity.walletAddress,
             public_key_hex: identity.publicKeyHex,
@@ -31,7 +116,6 @@ export class SupabaseRepository {
             description: identity.description,
             did_document: identity.didDocument,
             metadata: { ...identity.metadata, userId },
-            active: true,
           },
           { onConflict: "did" }
         )
@@ -80,7 +164,7 @@ export class SupabaseRepository {
       const { data, error } = await (await supabase)
         .from("identities")
         .select("*")
-        .contains("metadata->>userId", userId);
+        .eq("metadata->>userId", userId);
 
       if (error) {
         console.error("[v0] Error fetching user identities:", error);
@@ -517,9 +601,25 @@ export class SupabaseRepository {
       resourceType: data.resource_type,
       owner: data.owner_did,
       rules: [],
-      createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at),
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
       active: data.active,
+    };
+  }
+
+  private static mapDataExchangeMessageFromDB(data: any): DataExchangeMessage {
+    return {
+      id: data.message_id,
+      from: data.from_did,
+      to: data.to_did,
+      dataHash: data.data_hash,
+      encryptedData: data.encrypted_data,
+      encryptionAlgorithm: data.encryption_algorithm,
+      nonce: data.nonce,
+      timestamp: data.created_at ? new Date(data.created_at) : new Date(),
+      expiresAt: data.expires_at ? new Date(data.expires_at) : undefined,
+      credentialRequest: (data.credential_request || undefined) as CredentialRequest | undefined,
+      status: data.status,
     };
   }
 }

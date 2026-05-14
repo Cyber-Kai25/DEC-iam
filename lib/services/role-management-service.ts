@@ -101,6 +101,7 @@ class RoleManagementService {
         "create:verification-request",
         "read:verification-request",
         "verify:credential",
+        "read:presentation",
         "read:verification-history",
         "export:verification-history",
         "create:verification-policy",
@@ -238,6 +239,12 @@ class RoleManagementService {
           href: "/verifier/requests",
           icon: "Mail",
           description: "Create and manage verification requests",
+        },
+        {
+          label: "Presentations",
+          href: "/verifier/presentations",
+          icon: "Inbox",
+          description: "View received verifiable presentations",
         },
         {
           label: "Verify Credentials",

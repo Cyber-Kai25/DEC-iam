@@ -15,13 +15,21 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 export default function OwnerIdentityPage() {
-  const { currentIdentity, createIdentity } = useIdentity();
+  const { currentIdentity, createIdentity, error } = useIdentity();
   const { hasPermission } = useRole();
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
   const handleCreateIdentity = async () => {
     try {
-      const identity = createIdentity();
+      if (currentIdentity) {
+        toast.info("You already have an identity");
+        return;
+      }
+      const identity = await createIdentity();
+      if (!identity) {
+        toast.error(error || "Failed to create identity");
+        return;
+      }
       toast.success("Identity created successfully!");
     } catch (error) {
       toast.error("Failed to create identity");
@@ -204,7 +212,7 @@ export default function OwnerIdentityPage() {
                 <CardDescription>Create your first digital identity to get started</CardDescription>
               </CardHeader>
               <CardContent>
-                <Button onClick={handleCreateIdentity} size="lg">
+                <Button onClick={handleCreateIdentity} size="lg" disabled={!!currentIdentity}>
                   <Plus className="h-4 w-4 mr-2" />
                   Create My First Identity
                 </Button>

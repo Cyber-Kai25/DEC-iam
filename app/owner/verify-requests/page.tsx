@@ -8,50 +8,123 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Clock, CheckCircle2, XCircle, Eye } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import VerificationService from "@/lib/services/verification-service";
+import { VerifiablePresentation } from "@/lib/types/did";
 
 interface VerificationRequest {
   id: string;
-  from: string;
-  credentialType: string;
-  status: "pending" | "approved" | "denied";
-  createdAt: Date;
-  expiresAt: Date;
+  verifierDid: string;
+  requestedCredentials: string[];
+  challenge?: string;
+  status: "pending" | "accepted" | "rejected";
+  createdAt: string;
+  expiresAt?: string;
+  responsePayload?: string;
 }
 
 export default function OwnerVerifyRequestsPage() {
-  const [requests, setRequests] = useState<VerificationRequest[]>([
-    {
-      id: "vr-001",
-      from: "Example Verifier Organization",
-      credentialType: "Educational Credential",
-      status: "pending",
-      createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    },
-  ]);
+  const { currentIdentity, credentials } = useIdentity();
+  const [requests, setRequests] = useState<VerificationRequest[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const pendingRequests = requests.filter((r) => r.status === "pending");
-  const approvedRequests = requests.filter((r) => r.status === "approved");
-  const deniedRequests = requests.filter((r) => r.status === "denied");
-
-  const handleApprove = (id: string) => {
-    setRequests(
-      requests.map((r) =>
-        r.id === id ? { ...r, status: "approved" as const } : r
-      )
-    );
-    toast.success("Verification request approved");
+  const loadRequests = async () => {
+    try {
+      setIsLoading(true);
+      const res = await fetch("/api/verifications", { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Failed to load verification requests");
+      }
+      setRequests(json.data || []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load requests");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleDeny = (id: string) => {
-    setRequests(
-      requests.map((r) =>
-        r.id === id ? { ...r, status: "denied" as const } : r
-      )
-    );
-    toast.info("Verification request denied");
+  useEffect(() => {
+    loadRequests();
+  }, []);
+
+  const pendingRequests = requests.filter((r) => r.status === "pending");
+  const approvedRequests = requests.filter((r) => r.status === "accepted");
+  const deniedRequests = requests.filter((r) => r.status === "rejected");
+
+  const handleApprove = async (id: string) => {
+    try {
+      const req = requests.find((r) => r.id === id);
+      if (!req) {
+        toast.error("Request not found");
+        return;
+      }
+      if (!currentIdentity?.privateKeyHex) {
+        toast.error("No identity private key available");
+        return;
+      }
+
+      const matching = credentials.filter((c) => {
+        const types = Array.isArray(c.type) ? c.type : [String(c.type)];
+        return req.requestedCredentials.some((t) => types.includes(t));
+      });
+
+      let presentation: VerifiablePresentation | null = null;
+      if (matching.length > 0 && req.challenge) {
+        const result = VerificationService.createPresentation(
+          matching,
+          currentIdentity.did,
+          req.verifierDid,
+          req.challenge,
+          currentIdentity.privateKeyHex
+        );
+        presentation = result.presentation;
+      }
+
+      const res = await fetch("/api/verifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "respond",
+          requestId: id,
+          response: "approved",
+          presentation,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Failed to approve request");
+      }
+
+      setRequests(requests.map((r) => (r.id === id ? { ...r, status: "accepted" } : r)));
+      toast.success("Verification request approved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to approve request");
+    }
+  };
+
+  const handleDeny = async (id: string) => {
+    try {
+      const res = await fetch("/api/verifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "respond",
+          requestId: id,
+          response: "denied",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Failed to deny request");
+      }
+
+      setRequests(requests.map((r) => (r.id === id ? { ...r, status: "rejected" } : r)));
+      toast.info("Verification request denied");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to deny request");
+    }
   };
 
   const VerificationCard = ({ request }: { request: VerificationRequest }) => (
@@ -59,14 +132,16 @@ export default function OwnerVerifyRequestsPage() {
       <CardHeader>
         <div className="flex items-start justify-between">
           <div>
-            <CardTitle className="text-lg">{request.from}</CardTitle>
-            <CardDescription>Requesting {request.credentialType}</CardDescription>
+            <CardTitle className="text-lg">{request.verifierDid}</CardTitle>
+            <CardDescription>
+              Requesting {request.requestedCredentials?.[0] || "credentials"}
+            </CardDescription>
           </div>
           <Badge
             variant={
               request.status === "pending"
                 ? "secondary"
-                : request.status === "approved"
+                : request.status === "accepted"
                   ? "default"
                   : "destructive"
             }
@@ -78,10 +153,10 @@ export default function OwnerVerifyRequestsPage() {
       <CardContent className="space-y-4">
         <div className="text-sm text-muted-foreground space-y-1">
           <p>
-            Requested: {request.createdAt.toLocaleDateString()} at{" "}
-            {request.createdAt.toLocaleTimeString()}
+            Requested: {new Date(request.createdAt).toLocaleDateString()} at{" "}
+            {new Date(request.createdAt).toLocaleTimeString()}
           </p>
-          <p>Expires: {request.expiresAt.toLocaleDateString()}</p>
+          {request.expiresAt && <p>Expires: {new Date(request.expiresAt).toLocaleDateString()}</p>}
         </div>
 
         {request.status === "pending" && (
@@ -104,7 +179,7 @@ export default function OwnerVerifyRequestsPage() {
           </div>
         )}
 
-        {request.status === "approved" && (
+        {request.status === "accepted" && (
           <Button variant="outline" className="w-full bg-transparent">
             <Eye className="h-4 w-4 mr-2" />
             View Presentation

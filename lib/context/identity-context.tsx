@@ -13,6 +13,7 @@ import AccessControlService from "@/lib/services/access-control-service";
 import DataExchangeService from "@/lib/services/data-exchange-service";
 import BlockchainService from "@/lib/services/blockchain-service";
 import SupabaseRepository from "@/lib/services/supabase-repository";
+import { createClient } from "@/lib/supabase/client";
 import { ethers } from "ethers";
 
 interface IdentityContextType {
@@ -48,6 +49,7 @@ interface IdentityContextType {
     resourceType: "credential" | "data" | "service"
   ) => Promise<AccessControlPolicy | null>;
   updatePolicy: (policy: AccessControlPolicy) => Promise<AccessControlPolicy | null>;
+  deletePolicy: (policyId: string) => Promise<boolean>;
   evaluateAccess: (
     policyId: string,
     requesterDID: string,
@@ -95,6 +97,35 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     initBlockchain();
   }, []);
 
+  // Detect user from Supabase auth session (source of truth)
+  useEffect(() => {
+    const supabase = createClient();
+
+    const syncFromSession = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        setCurrentUserId(user?.id ?? null);
+      } catch (err) {
+        console.error("[v0] Error reading Supabase session:", err);
+        setCurrentUserId(null);
+      }
+    };
+
+    syncFromSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      syncFromSession();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // Detect user from localStorage (set by RoleProvider)
   useEffect(() => {
     const checkUserState = async () => {
@@ -136,15 +167,45 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       setError(null);
 
-      const identity = DIDService.createIdentity(name);
-      
-      // Save to Supabase if user is authenticated
-      let savedIdentity = identity;
-      if (currentUserId) {
-        savedIdentity = await SupabaseRepository.saveIdentity(identity, currentUserId) || identity;
-        console.log("[v0] Identity saved to Supabase:", { did: savedIdentity.did, userId: currentUserId });
+      // Single identity per owner: if one exists, keep it
+      try {
+        const existingRes = await fetch('/api/identities', {
+          method: 'GET',
+          headers: { 'x-active-role': 'owner' },
+        });
+        const existingJson = await existingRes.json();
+        const existing = existingJson?.success ? (existingJson.data as Identity[]) : [];
+        if (existing.length > 0) {
+          setCurrentIdentity(existing[0]);
+          const newIdentities = new Map(existing.map((id) => [id.id, id]));
+          setIdentities(newIdentities);
+          return existing[0];
+        }
+      } catch {
+        // ignore
       }
 
+      const res = await fetch('/api/identities', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-active-role': 'owner',
+        },
+        body: JSON.stringify({ name: name || 'Owner Identity' }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      const json = contentType.includes('application/json') ? await res.json() : null;
+      if (!res.ok || !json?.success || !json?.data) {
+        setError(
+          json?.error ||
+            (res.status === 401
+              ? 'Unauthorized: please log in again'
+              : 'Failed to create identity')
+        );
+        return null;
+      }
+
+      const savedIdentity = json.data as Identity;
       setCurrentIdentity(savedIdentity);
 
       const newIdentities = new Map(identities);
@@ -192,6 +253,17 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         updatedAt: new Date(),
       };
 
+      if (currentUserId) {
+        const saved = await SupabaseRepository.saveIdentity(updated, currentUserId);
+        if (saved) {
+          setCurrentIdentity(saved);
+          const newIdentities = new Map(identities);
+          newIdentities.set(saved.id, saved);
+          setIdentities(newIdentities);
+          return saved;
+        }
+      }
+
       setCurrentIdentity(updated);
 
       const newIdentities = new Map(identities);
@@ -211,6 +283,14 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
       setError(null);
+
+      const target = identities.get(id);
+      if (currentUserId && target?.did) {
+        const ok = await SupabaseRepository.deleteIdentity(target.did);
+        if (!ok) {
+          return false;
+        }
+      }
 
       if (currentIdentity?.id === id) {
         setCurrentIdentity(null);
@@ -240,13 +320,23 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
       const identity = DIDService.importIdentity(json);
       if (identity) {
-        setCurrentIdentity(identity);
+        let savedIdentity = identity;
+        if (currentUserId) {
+          savedIdentity =
+            (await SupabaseRepository.saveIdentity(identity, currentUserId)) || identity;
+          console.log("[v0] Imported identity saved to Supabase:", {
+            did: savedIdentity.did,
+            userId: currentUserId,
+          });
+        }
+
+        setCurrentIdentity(savedIdentity);
 
         const newIdentities = new Map(identities);
-        newIdentities.set(identity.id, identity);
+        newIdentities.set(savedIdentity.id, savedIdentity);
         setIdentities(newIdentities);
 
-        return identity;
+        return savedIdentity;
       }
 
       return null;
@@ -384,6 +474,14 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         updatedAt: new Date(),
       };
 
+      if (currentUserId) {
+        const saved = await SupabaseRepository.savePolicy(updated, currentUserId);
+        if (saved) {
+          setPolicies(policies.map((p) => (p.id === policy.id ? saved : p)));
+          return saved;
+        }
+      }
+
       setPolicies(
         policies.map((p) => (p.id === policy.id ? updated : p))
       );
@@ -392,6 +490,23 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       handleError(err, "updatePolicy");
       return null;
+    }
+  };
+
+  const deletePolicy = async (policyId: string): Promise<boolean> => {
+    try {
+      if (currentUserId) {
+        const ok = await SupabaseRepository.deletePolicy(policyId);
+        if (!ok) {
+          return false;
+        }
+      }
+
+      setPolicies(policies.filter((p) => p.id !== policyId));
+      return true;
+    } catch (err) {
+      handleError(err, "deletePolicy");
+      return false;
     }
   };
 
@@ -550,26 +665,54 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
 
-      // Load identities from Supabase
-      const userIdentities = await SupabaseRepository.getUserIdentities(userId);
-      if (userIdentities.length > 0) {
-        const identityMap = new Map(userIdentities.map((id) => [id.id, id]));
-        setIdentities(identityMap);
-        setCurrentIdentity(userIdentities[0]); // Set first identity as current
-        console.log("[v0] Loaded identities from Supabase:", { count: userIdentities.length });
-
-        // Load credentials
-        const allCredentials = await SupabaseRepository.getCredentials(userId, "owner");
-        setCredentials(allCredentials);
-        console.log("[v0] Loaded credentials from Supabase:", { count: allCredentials.length });
-
-        // Load policies
-        if (userIdentities[0]) {
-          const allPolicies = await SupabaseRepository.getPolicies(userIdentities[0].did);
-          setPolicies(allPolicies);
-          console.log("[v0] Loaded policies from Supabase:", { count: allPolicies.length });
-        }
+      // Load identities via API (server-side access to DB)
+      const identitiesRes = await fetch('/api/identities', {
+        method: 'GET',
+        headers: { 'x-active-role': 'owner' },
+      });
+      const identitiesContentType = identitiesRes.headers.get('content-type') || '';
+      if (!identitiesRes.ok) {
+        const text = await identitiesRes.text().catch(() => '');
+        setError(
+          `loadFromSupabase: Failed to fetch identities (${identitiesRes.status}). ` +
+            (text ? text.slice(0, 200) : '')
+        );
+        return;
       }
+
+      if (!identitiesContentType.includes('application/json')) {
+        const text = await identitiesRes.text().catch(() => '');
+        setError(
+          `loadFromSupabase: Expected JSON from /api/identities but got '${identitiesContentType}'. ` +
+            (text ? text.slice(0, 200) : '')
+        );
+        return;
+      }
+
+      const identitiesJson = await identitiesRes.json();
+      const userIdentities = identitiesJson?.success ? (identitiesJson.data as Identity[]) : [];
+
+      if (userIdentities.length === 0) {
+        setIdentities(new Map());
+        setCurrentIdentity(null);
+        setCredentials([]);
+        setPolicies([]);
+        setMessages([]);
+        return;
+      }
+
+      const identityMap = new Map(userIdentities.map((id) => [id.id, id]));
+      setIdentities(identityMap);
+      setCurrentIdentity(userIdentities[0]);
+      console.log("[v0] Loaded identities from API:", { count: userIdentities.length });
+
+      const allCredentials = await SupabaseRepository.getCredentials(userId, "owner");
+      setCredentials(allCredentials);
+      console.log("[v0] Loaded credentials from Supabase:", { count: allCredentials.length });
+
+      const allPolicies = await SupabaseRepository.getPolicies(userIdentities[0].did);
+      setPolicies(allPolicies);
+      console.log("[v0] Loaded policies from Supabase:", { count: allPolicies.length });
     } catch (err) {
       handleError(err, "loadFromSupabase");
     } finally {
@@ -634,6 +777,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     policies,
     createPolicy,
     updatePolicy,
+    deletePolicy,
     evaluateAccess,
     addPolicy,
     messages,

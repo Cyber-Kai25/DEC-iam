@@ -8,13 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CredentialCard } from "@/components/credential-card";
-import { Plus, FileCheck, Eye, Share2, Download } from "lucide-react";
-import { useState } from "react";
+import { FileCheck } from "lucide-react";
 import { toast } from "sonner";
+import VerificationService from "@/lib/services/verification-service";
 
 export default function OwnerCredentialsPage() {
-  const { credentials, policies } = useIdentity();
-  const [selectedCredential, setSelectedCredential] = useState<typeof credentials[0] | null>(null);
+  const { credentials, currentIdentity } = useIdentity();
 
   const activeCredentials = credentials.filter(
     (c) => !c.expirationDate || new Date(c.expirationDate) > new Date()
@@ -24,16 +23,86 @@ export default function OwnerCredentialsPage() {
   );
   const revokedCredentials = credentials.filter((c) => (c as any).revoked);
 
-  const handleShareCredential = (credentialId: string) => {
-    toast.success(`Credential ${credentialId} shared successfully`);
+  const handleVerifyCredential = async (credential: any) => {
+    try {
+      const result = VerificationService.verifyCredential(credential);
+      if (!result.valid) {
+        toast.error(result.error || "Credential verification failed");
+        return;
+      }
+      toast.success("Credential verified");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Credential verification failed");
+    }
   };
 
-  const handleDownloadCredential = (credentialId: string) => {
-    toast.success(`Credential ${credentialId} downloaded`);
+  const handleDownloadCredential = (credential: any) => {
+    try {
+      const data = JSON.stringify(credential, null, 2);
+      const blob = new Blob([data], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `credential-${credential.id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Credential downloaded");
+    } catch {
+      toast.error("Failed to download credential");
+    }
   };
 
-  const handlePresentCredential = (credentialId: string) => {
-    toast.info(`Presentation initiated for credential ${credentialId}`);
+  const handlePresentCredential = (credential: any) => {
+    try {
+      if (!currentIdentity?.privateKeyHex) {
+        toast.error("No identity private key available");
+        return;
+      }
+      const verifierDid = window.prompt("Enter verifier DID");
+      if (!verifierDid) {
+        return;
+      }
+      const challenge = crypto.randomUUID();
+      const result = VerificationService.createPresentation(
+        [credential],
+        currentIdentity.did,
+        verifierDid,
+        challenge,
+        currentIdentity.privateKeyHex
+      );
+      const presentation = result.presentation;
+
+      void (async () => {
+        try {
+          const res = await fetch('/api/presentations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ verifierDid, presentation }),
+          });
+          const json = await res.json();
+          if (!res.ok || !json?.success) {
+            toast.error(json?.error || 'Failed to deliver presentation');
+            return;
+          }
+          toast.success('Presentation delivered to verifier');
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : 'Failed to deliver presentation');
+        }
+      })();
+
+      const blob = new Blob([JSON.stringify(presentation, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `presentation-${credential.id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Presentation created");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create presentation");
+    }
   };
 
   return (
@@ -113,7 +182,13 @@ export default function OwnerCredentialsPage() {
               ) : (
                 <div className="grid gap-4">
                   {activeCredentials.map((credential) => (
-                    <CredentialCard key={credential.id} credential={credential} />
+                    <CredentialCard
+                      key={credential.id}
+                      credential={credential}
+                      onVerify={handleVerifyCredential}
+                      onDownload={handleDownloadCredential}
+                      onPresent={handlePresentCredential}
+                    />
                   ))}
                 </div>
               )}
@@ -130,7 +205,13 @@ export default function OwnerCredentialsPage() {
               ) : (
                 <div className="grid gap-4">
                   {expiredCredentials.map((credential) => (
-                    <CredentialCard key={credential.id} credential={credential} />
+                    <CredentialCard
+                      key={credential.id}
+                      credential={credential}
+                      onVerify={handleVerifyCredential}
+                      onDownload={handleDownloadCredential}
+                      onPresent={handlePresentCredential}
+                    />
                   ))}
                 </div>
               )}
@@ -147,7 +228,13 @@ export default function OwnerCredentialsPage() {
               ) : (
                 <div className="grid gap-4">
                   {revokedCredentials.map((credential) => (
-                    <CredentialCard key={credential.id} credential={credential} />
+                    <CredentialCard
+                      key={credential.id}
+                      credential={credential}
+                      onVerify={handleVerifyCredential}
+                      onDownload={handleDownloadCredential}
+                      onPresent={handlePresentCredential}
+                    />
                   ))}
                 </div>
               )}

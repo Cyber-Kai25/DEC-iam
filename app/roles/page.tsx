@@ -10,9 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { User, Award, CheckCircle2, ArrowRight } from "lucide-react";
 import RoleManagementService from "@/lib/services/role-management-service";
 import { User as UserType, UserRole } from "@/lib/types/did";
+import { createClient } from "@/lib/supabase/client";
 
 export default function RoleSelectionPage() {
-  const { setCurrentUser } = useRole();
+  const { setCurrentUser, currentUser } = useRole();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [selectedRoles, setSelectedRoles] = useState<UserRole[]>(["owner"]);
@@ -46,7 +47,7 @@ export default function RoleSelectionPage() {
     );
   };
 
-  const handleGetStarted = () => {
+  const handleGetStarted = async () => {
     if (selectedRoles.length === 0) {
       alert("Please select at least one role");
       return;
@@ -54,8 +55,19 @@ export default function RoleSelectionPage() {
 
     // Create a user with selected roles
     const firstRole = selectedRoles[0];
+    let stableUserId = currentUser?.id;
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getUser();
+      if (data?.user?.id) {
+        stableUserId = data.user.id;
+      }
+    } catch {
+      // ignore
+    }
+
     const newUser: UserType = {
-      id: `user-${Date.now()}`,
+      id: stableUserId || `user-${Date.now()}`,
       email: email || undefined,
       roles: selectedRoles,
       activeRole: firstRole,
