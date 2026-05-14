@@ -215,7 +215,6 @@ export class SupabaseRepository {
         .from("verifiable_credentials")
         .upsert(
           {
-            id: credential.id,
             credential_id: credential.id,
             issuer_did: credential.issuer,
             subject_did: credential.credentialSubject?.id || "",
@@ -255,6 +254,19 @@ export class SupabaseRepository {
     try {
       const supabase = this.getClient();
       let query = (await supabase).from("verifiable_credentials").select("*");
+
+      // Filter based on the user's DID, so each user only sees their own credentials.
+      // This aligns with the project schema (credentials link to identities via issuer_did/subject_did).
+      const identities = await this.getUserIdentities(userId);
+      const did = identities[0]?.did;
+      if (did) {
+        if (role === "owner") {
+          query = query.eq("subject_did", did);
+        }
+        if (role === "issuer") {
+          query = query.eq("issuer_did", did);
+        }
+      }
 
       if (role === "owner") {
         query = query.eq("status", "active");

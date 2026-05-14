@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Download, Eye } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import VerificationService from "@/lib/services/verification-service";
 
 interface VerificationRecord {
   id: string;
@@ -17,26 +19,65 @@ interface VerificationRecord {
 }
 
 export default function VerifierHistoryPage() {
-  const records: VerificationRecord[] = [
-    {
-      id: "vr-001",
-      credentialType: "EducationCredential",
-      issuer: "University XYZ",
-      verifiedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-      result: "valid",
-    },
-    {
-      id: "vr-002",
-      credentialType: "ProfessionalLicense",
-      issuer: "Professional Board",
-      verifiedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-      result: "valid",
-    },
-  ];
+  const [records, setRecords] = useState<VerificationRecord[]>([]);
 
-  const validRecords = records.filter((r) => r.result === "valid");
-  const invalidRecords = records.filter((r) => r.result === "invalid");
-  const expiredRecords = records.filter((r) => r.result === "expired");
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/presentations", {
+          method: "GET",
+          headers: { "x-active-role": "verifier" },
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (!res.ok || !json?.success) {
+          setRecords([]);
+          return;
+        }
+
+        const items = Array.isArray(json.data) ? json.data : [];
+        const next: VerificationRecord[] = [];
+
+        for (const item of items) {
+          const presentation = item?.presentation;
+          const holderDid = typeof presentation?.holder === "string" ? presentation.holder : "";
+          const holderAddress = holderDid ? holderDid.split(":").pop() || holderDid : "";
+
+          const verifyResult = presentation && holderAddress
+            ? VerificationService.verifyPresentation(presentation, holderAddress)
+            : { valid: false };
+
+          const result: "valid" | "invalid" | "expired" = verifyResult.valid
+            ? "valid"
+            : "invalid";
+
+          const vcs = Array.isArray(presentation?.verifiableCredential)
+            ? presentation.verifiableCredential
+            : [];
+
+          const verifiedAt = item?.createdAt ? new Date(item.createdAt) : new Date();
+
+          for (const vc of vcs) {
+            const types = Array.isArray(vc?.type) ? vc.type : [];
+            const credentialType =
+              types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
+            const issuer = typeof vc?.issuer === "string" ? vc.issuer : "";
+            const id = `${item?.id || holderDid}-${vc?.id || credentialType || "cred"}`;
+            next.push({ id, credentialType, issuer, verifiedAt, result });
+          }
+        }
+
+        setRecords(next);
+      } catch (e) {
+        console.error("[v0] Failed to load verifier history:", e);
+        setRecords([]);
+      }
+    })();
+  }, []);
+
+  const validRecords = useMemo(() => records.filter((r) => r.result === "valid"), [records]);
+  const invalidRecords = useMemo(() => records.filter((r) => r.result === "invalid"), [records]);
+  const expiredRecords = useMemo(() => records.filter((r) => r.result === "expired"), [records]);
 
   return (
     <ProtectedRoute requiredRole="verifier" requiredPermission="read:verification-history">

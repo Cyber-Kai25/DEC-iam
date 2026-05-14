@@ -5,16 +5,73 @@ import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, AlertCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 export default function VerifierAnalyticsPage() {
-  const metrics = {
-    totalVerifications: 247,
-    successRate: 94.3,
-    averageTime: "2.5s",
-    thisMonthVerifications: 45,
-    topCredentialType: "EducationCredential",
-    topIssuer: "University XYZ",
-  };
+  const [presentations, setPresentations] = useState<any[]>([]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/presentations", {
+          method: "GET",
+          headers: { "x-active-role": "verifier" },
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (!res.ok || !json?.success) {
+          setPresentations([]);
+          return;
+        }
+        setPresentations(Array.isArray(json.data) ? json.data : []);
+      } catch (e) {
+        console.error("[v0] Failed to load verifier analytics:", e);
+        setPresentations([]);
+      }
+    })();
+  }, []);
+
+  const metrics = useMemo(() => {
+    const totalVerifications = presentations.length;
+    const accepted = presentations.filter((p) => p?.status === "accepted").length;
+    const successRate = totalVerifications === 0 ? 0 : Math.round((accepted / totalVerifications) * 1000) / 10;
+
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthVerifications = presentations.filter((p) => {
+      const createdAt = p?.createdAt ? new Date(p.createdAt) : null;
+      return createdAt ? createdAt >= start : false;
+    }).length;
+
+    const allCredentials = presentations.flatMap((p) => {
+      const vc = p?.presentation?.verifiableCredential;
+      return Array.isArray(vc) ? vc : [];
+    });
+
+    const byType = new Map<string, number>();
+    const byIssuer = new Map<string, number>();
+
+    for (const cred of allCredentials) {
+      const types = Array.isArray(cred?.type) ? cred.type : [];
+      const type = types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
+      if (type) byType.set(type, (byType.get(type) || 0) + 1);
+      const issuer = typeof cred?.issuer === "string" ? cred.issuer : "";
+      if (issuer) byIssuer.set(issuer, (byIssuer.get(issuer) || 0) + 1);
+    }
+
+    const topCredentialType = [...byType.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    const topIssuer = [...byIssuer.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+
+    return {
+      totalVerifications,
+      successRate,
+      averageTime: "",
+      thisMonthVerifications,
+      topCredentialType,
+      topIssuer,
+      byType,
+    };
+  }, [presentations]);
 
   return (
     <ProtectedRoute requiredRole="verifier">
@@ -56,7 +113,7 @@ export default function VerifierAnalyticsPage() {
                 <CardTitle className="text-sm font-medium">Avg. Verification Time</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{metrics.averageTime}</div>
+                <div className="text-2xl font-bold">{metrics.averageTime || "-"}</div>
                 <p className="text-xs text-muted-foreground">Per credential</p>
               </CardContent>
             </Card>
@@ -72,22 +129,6 @@ export default function VerifierAnalyticsPage() {
               <CardContent className="space-y-4">
                 <div className="text-3xl font-bold">{metrics.thisMonthVerifications}</div>
                 <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Week 1</span>
-                    <span>8</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Week 2</span>
-                    <span>12</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Week 3</span>
-                    <span>15</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Week 4</span>
-                    <span>10</span>
-                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -101,13 +142,13 @@ export default function VerifierAnalyticsPage() {
                 <div className="p-3 bg-muted rounded">
                   <p className="font-medium text-sm">Most Verified Credential</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {metrics.topCredentialType}
+                    {metrics.topCredentialType || "-"}
                   </p>
                 </div>
                 <div className="p-3 bg-muted rounded">
                   <p className="font-medium text-sm">Top Issuer</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {metrics.topIssuer}
+                    {metrics.topIssuer || "-"}
                   </p>
                 </div>
               </CardContent>
@@ -122,22 +163,22 @@ export default function VerifierAnalyticsPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {[
-                  { type: "EducationCredential", success: 96, time: "2.1s", count: 145 },
-                  { type: "ProfessionalLicense", success: 92, time: "3.2s", count: 78 },
-                  { type: "EmploymentCredential", success: 94, time: "2.8s", count: 24 },
-                ].map((row) => (
-                  <div key={row.type} className="p-3 border rounded">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">{row.type}</span>
-                      <Badge variant="outline">{row.count} verified</Badge>
+                {[...metrics.byType.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([type, count]) => (
+                    <div key={type} className="p-3 border rounded">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-sm">{type}</span>
+                        <Badge variant="outline">{count} verified</Badge>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
-                      <div>Success Rate: {row.success}%</div>
-                      <div>Avg. Time: {row.time}</div>
-                    </div>
+                  ))}
+
+                {metrics.byType.size === 0 && (
+                  <div className="p-3 border rounded text-sm text-muted-foreground">
+                    No verification analytics yet
                   </div>
-                ))}
+                )}
               </div>
             </CardContent>
           </Card>

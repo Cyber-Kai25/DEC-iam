@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRole } from "@/lib/context/role-context";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { User as UserType, UserRole } from "@/lib/types/did";
 import { createClient } from "@/lib/supabase/client";
 
 export default function RoleSelectionPage() {
-  const { setCurrentUser, currentUser } = useRole();
+  const { setCurrentUser, currentUser, activeRole, isAuthenticated } = useRole();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [selectedRoles, setSelectedRoles] = useState<UserRole[]>(["owner"]);
@@ -47,6 +47,19 @@ export default function RoleSelectionPage() {
     );
   };
 
+  useEffect(() => {
+    // If user is already authenticated and has an active role, send them to their dashboard.
+    if (isAuthenticated && activeRole) {
+      router.replace(`/${activeRole}/dashboard`);
+      return;
+    }
+
+    // If not authenticated, send them to login.
+    if (!isAuthenticated) {
+      router.replace("/auth/login");
+    }
+  }, [activeRole, isAuthenticated, router]);
+
   const handleGetStarted = async () => {
     if (selectedRoles.length === 0) {
       alert("Please select at least one role");
@@ -66,8 +79,13 @@ export default function RoleSelectionPage() {
       // ignore
     }
 
+    if (!stableUserId) {
+      router.push("/auth/login");
+      return;
+    }
+
     const newUser: UserType = {
-      id: stableUserId || `user-${Date.now()}`,
+      id: stableUserId,
       email: email || undefined,
       roles: selectedRoles,
       activeRole: firstRole,

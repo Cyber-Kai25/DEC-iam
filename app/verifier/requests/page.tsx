@@ -23,16 +23,7 @@ interface VerificationRequest {
 }
 
 export default function VerifierRequestsPage() {
-  const [requests, setRequests] = useState<VerificationRequest[]>([
-    {
-      id: "vr-001",
-      recipientDID: "did:ethr:11155111:0x123...",
-      credentialType: "EducationCredential",
-      status: "received",
-      sentAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    },
-  ]);
+  const [requests, setRequests] = useState<VerificationRequest[]>([]);
 
   const [formData, setFormData] = useState({
     recipientDID: "",
@@ -44,25 +35,66 @@ export default function VerifierRequestsPage() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSendRequest = () => {
+  const loadRequests = async () => {
+    try {
+      const res = await fetch("/api/verifications", {
+        method: "GET",
+        headers: { "x-active-role": "verifier" },
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error || "Failed to load verification requests");
+        return;
+      }
+
+      const mapped: VerificationRequest[] = (json.data || []).map((r: any) => ({
+        id: r.id,
+        recipientDID: r.subjectDid,
+        credentialType: (r.requestedCredentials || [])[0] || "",
+        status: r.status === "accepted" ? "received" : "pending",
+        sentAt: r.createdAt ? new Date(r.createdAt) : new Date(),
+        expiresAt: r.expiresAt ? new Date(r.expiresAt) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      }));
+      setRequests(mapped);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load verification requests");
+    }
+  };
+
+  const handleSendRequest = async () => {
     if (!formData.recipientDID) {
       toast.error("Please enter recipient DID");
       return;
     }
 
-    const newRequest: VerificationRequest = {
-      id: `vr-${Date.now()}`,
-      recipientDID: formData.recipientDID,
-      credentialType: formData.credentialType,
-      status: "pending",
-      sentAt: new Date(),
-      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-    };
+    try {
+      const res = await fetch("/api/verifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-active-role": "verifier" },
+        body: JSON.stringify({
+          action: "create",
+          subjectDid: formData.recipientDID,
+          requestedCredentials: [formData.credentialType],
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error || "Failed to send verification request");
+        return;
+      }
 
-    setRequests([newRequest, ...requests]);
-    toast.success("Verification request sent");
-    setFormData({ recipientDID: "", credentialType: "EducationCredential" });
+      toast.success("Verification request sent");
+      setFormData({ recipientDID: "", credentialType: "EducationCredential" });
+      await loadRequests();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to send verification request");
+    }
   };
+
+  React.useEffect(() => {
+    void loadRequests();
+  }, []);
 
   const pendingRequests = requests.filter((r) => r.status === "pending");
   const receivedRequests = requests.filter((r) => r.status === "received");

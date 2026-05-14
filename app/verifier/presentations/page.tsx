@@ -35,7 +35,11 @@ export default function VerifierPresentationsInboxPage() {
     void (async () => {
       setIsLoading(true);
       try {
-        const res = await fetch("/api/presentations", { method: "GET" });
+        const res = await fetch("/api/presentations", {
+          method: "GET",
+          headers: { "x-active-role": "verifier" },
+          cache: "no-store",
+        });
         const json = await res.json();
         if (!res.ok || !json?.success) {
           toast.error(json?.error || "Failed to load presentations");

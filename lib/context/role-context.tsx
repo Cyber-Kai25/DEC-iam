@@ -46,6 +46,29 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
+  const setCurrentUserAndPersist = (user: User) => {
+    setCurrentUser(user);
+
+    const nextRole: UserRole =
+      user.activeRole && user.roles.includes(user.activeRole)
+        ? user.activeRole
+        : (user.roles[0] || "owner");
+    setActiveRole(nextRole);
+
+    try {
+      const state = {
+        user: { ...user, activeRole: nextRole },
+        activeRole: nextRole,
+        activeOrganization,
+        organizations,
+      };
+      localStorage.setItem("role-app-state", JSON.stringify(state));
+      console.log(`[v0] Saved state via setCurrentUser with activeRole: ${nextRole}`);
+    } catch (err) {
+      console.error("[v0] Error saving role state during setCurrentUser:", err);
+    }
+  };
+
   // Load user state from localStorage on mount
   useEffect(() => {
     loadUserState();
@@ -119,7 +142,21 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
       const userWithActiveRole = { ...updated, activeRole: role };
       setCurrentUser(userWithActiveRole);
       setActiveRole(role);
-      saveUserState();
+
+      // Persist immediately using the intended next role (avoid stale state reads)
+      try {
+        const state = {
+          user: userWithActiveRole,
+          activeRole: role,
+          activeOrganization,
+          organizations,
+        };
+        localStorage.setItem("role-app-state", JSON.stringify(state));
+        console.log(`[v0] Saved state with activeRole: ${role}`);
+      } catch (err) {
+        console.error("[v0] Error saving role state during switchRole:", err);
+      }
+
       console.log(`[v0] Successfully switched to role: ${role}`);
       return true;
     }
@@ -216,7 +253,7 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   const value: RoleContextType = {
     currentUser,
     isAuthenticated: !!currentUser,
-    setCurrentUser,
+    setCurrentUser: setCurrentUserAndPersist,
     activeRole,
     switchRole,
     hasRole,

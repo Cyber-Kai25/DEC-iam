@@ -76,7 +76,7 @@ export default function OwnerCredentialsPage() {
         try {
           const res = await fetch('/api/presentations', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-active-role': 'owner' },
             body: JSON.stringify({ verifierDid, presentation }),
           });
           const json = await res.json();

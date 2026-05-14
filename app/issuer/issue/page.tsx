@@ -17,7 +17,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 export default function IssuerIssuePage() {
-  const { createCredential } = useIdentity();
   const [formData, setFormData] = useState({
     recipientDID: "",
     credentialType: "EducationCredential",
@@ -52,14 +51,28 @@ export default function IssuerIssuePage() {
     }
 
     try {
-      await createCredential(
-        formData.recipientDID,
-        formData.credentialType,
-        subject,
-        formData.expirationDate
-          ? Math.ceil((new Date(formData.expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-          : undefined,
-      );
+      const res = await fetch("/api/credentials", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-active-role": "issuer",
+        },
+        body: JSON.stringify({
+          subjectDid: formData.recipientDID,
+          credentialType: formData.credentialType,
+          claims: subject,
+          expirationDays: formData.expirationDate
+            ? Math.ceil(
+                (new Date(formData.expirationDate).getTime() - Date.now()) /
+                  (1000 * 60 * 60 * 24)
+              )
+            : undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Failed to issue credential");
+      }
 
       toast.success("Credential issued successfully");
       setFormData({
@@ -69,7 +82,7 @@ export default function IssuerIssuePage() {
         expirationDate: "",
       });
     } catch (error) {
-      toast.error("Failed to issue credential");
+      toast.error(error instanceof Error ? error.message : "Failed to issue credential");
     }
   };
 

@@ -2,32 +2,25 @@
 
 import { useRole } from "@/lib/context/role-context";
 import { useIdentity } from "@/lib/context/identity-context";
+import { ProtectedRoute } from "@/components/protected-route";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PlusCircle, FileCheck, CheckCircle2, Shield, Lock } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 
 export default function OwnerDashboard() {
-  const { activeRole, isAuthenticated } = useRole();
+  const { activeRole } = useRole();
   const { currentIdentity, credentials, policies } = useIdentity();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (activeRole !== "owner") {
-      router.push("/");
-    }
-  }, [activeRole, router]);
 
   const recentCredentials = credentials.slice(0, 3);
   const activePolicies = policies.filter((p) => p.active);
 
   return (
-    <AppShell>
-      <div className="space-y-8">
+    <ProtectedRoute requiredRole="owner">
+      <AppShell>
+        <div className="space-y-8">
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Identity Owner Dashboard</h1>
@@ -180,7 +173,7 @@ export default function OwnerDashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Link href="/">
+              <Link href="/owner/identity">
                 <Button className="gap-2">
                   <PlusCircle className="h-4 w-4" />
                   Create My First Identity
@@ -189,7 +182,8 @@ export default function OwnerDashboard() {
             </CardContent>
           </Card>
         )}
-      </div>
-    </AppShell>
+        </div>
+      </AppShell>
+    </ProtectedRoute>
   );
 }

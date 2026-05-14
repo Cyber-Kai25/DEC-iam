@@ -167,11 +167,21 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       setError(null);
 
+      const activeRole = (() => {
+        try {
+          const stored = localStorage.getItem("role-app-state");
+          const state = stored ? JSON.parse(stored) : null;
+          return state?.activeRole || "owner";
+        } catch {
+          return "owner";
+        }
+      })();
+
       // Single identity per owner: if one exists, keep it
       try {
         const existingRes = await fetch('/api/identities', {
           method: 'GET',
-          headers: { 'x-active-role': 'owner' },
+          headers: { 'x-active-role': activeRole },
         });
         const existingJson = await existingRes.json();
         const existing = existingJson?.success ? (existingJson.data as Identity[]) : [];
@@ -189,7 +199,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-active-role': 'owner',
+          'x-active-role': activeRole,
         },
         body: JSON.stringify({ name: name || 'Owner Identity' }),
       });
@@ -665,10 +675,20 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
 
+      const activeRole = (() => {
+        try {
+          const stored = localStorage.getItem("role-app-state");
+          const state = stored ? JSON.parse(stored) : null;
+          return state?.activeRole || "owner";
+        } catch {
+          return "owner";
+        }
+      })();
+
       // Load identities via API (server-side access to DB)
       const identitiesRes = await fetch('/api/identities', {
         method: 'GET',
-        headers: { 'x-active-role': 'owner' },
+        headers: { 'x-active-role': activeRole },
       });
       const identitiesContentType = identitiesRes.headers.get('content-type') || '';
       if (!identitiesRes.ok) {
@@ -706,7 +726,9 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       setCurrentIdentity(userIdentities[0]);
       console.log("[v0] Loaded identities from API:", { count: userIdentities.length });
 
-      const allCredentials = await SupabaseRepository.getCredentials(userId, "owner");
+      const roleForCredentials =
+        activeRole === "issuer" || activeRole === "verifier" ? activeRole : "owner";
+      const allCredentials = await SupabaseRepository.getCredentials(userId, roleForCredentials);
       setCredentials(allCredentials);
       console.log("[v0] Loaded credentials from Supabase:", { count: allCredentials.length });
 

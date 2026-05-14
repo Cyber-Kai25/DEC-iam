@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthContext } from '@/lib/middleware/auth';
 import SupabaseRepository from '@/lib/services/supabase-repository';
+import { RBACService } from '@/lib/services/rbac-service';
+import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { ethers } from 'ethers';
 
 /**
@@ -9,22 +11,37 @@ import { ethers } from 'ethers';
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+    const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
+    const hasPermission =
+      activeRole === 'verifier'
+        ? RBACService.getRolePermissions(activeRole).includes('credential:verify')
+        : RBACService.getRolePermissions(activeRole).includes('credential:present');
+    if (!hasPermission) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: No permission to read presentations' },
+        { status: 403 }
+      );
+    }
+
+    const identities = await SupabaseRepository.getUserIdentities(user.id);
     const did = identities[0]?.did;
     if (!did) {
       return NextResponse.json({ success: true, data: [] });
     }
 
-    const direction = auth.activeRole === 'verifier' ? 'inbox' : 'outbox';
+    const direction = activeRole === 'verifier' ? 'inbox' : 'outbox';
     const messages = await SupabaseRepository.getDataExchangeMessagesForDid(
       did,
       direction
@@ -78,18 +95,30 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    if (auth.activeRole !== 'owner') {
+    const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
+    if (activeRole !== 'owner') {
       return NextResponse.json(
         { success: false, error: 'Forbidden: Only owners can send presentations' },
+        { status: 403 }
+      );
+    }
+
+    const hasPermission = RBACService.getRolePermissions(activeRole).includes('credential:present');
+    if (!hasPermission) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: No permission to send presentations' },
         { status: 403 }
       );
     }
@@ -108,7 +137,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+    const identities = await SupabaseRepository.getUserIdentities(user.id);
     const ownerDid = identities[0]?.did;
     if (!ownerDid) {
       return NextResponse.json(
@@ -137,13 +166,36 @@ export async function POST(request: NextRequest) {
       status: 'pending' as const,
     };
 
-    const saved = await SupabaseRepository.saveDataExchangeMessage(message);
-    if (!saved) {
+    const admin = createAdminClient();
+    const { data: savedRow, error: saveError } = await admin
+      .from('data_exchange_messages')
+      .upsert(
+        {
+          message_id: message.id,
+          from_did: message.from,
+          to_did: message.to,
+          data_hash: message.dataHash,
+          encrypted_data: message.encryptedData,
+          encryption_algorithm: message.encryptionAlgorithm,
+          nonce: message.nonce,
+          status: message.status,
+          credential_request: null,
+          expires_at: message.expiresAt ? new Date(message.expiresAt) : null,
+          read_at: null,
+        },
+        { onConflict: 'message_id' }
+      )
+      .select()
+      .single();
+
+    if (saveError || !savedRow) {
       return NextResponse.json(
-        { success: false, error: 'Failed to persist presentation message' },
+        { success: false, error: (saveError as any)?.message || 'Failed to persist presentation message' },
         { status: 500 }
       );
     }
+
+    const saved = (SupabaseRepository as any).mapDataExchangeMessageFromDB(savedRow) as any;
 
     return NextResponse.json({ success: true, data: saved }, { status: 201 });
   } catch (error) {

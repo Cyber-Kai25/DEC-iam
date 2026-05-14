@@ -275,7 +275,7 @@ export class VerificationService {
     presentation: VerifiablePresentation;
     proofValue: string;
   } {
-    const presentation: VerifiablePresentation = {
+    const presentationWithoutProof: Omit<VerifiablePresentation, "proof"> = {
       "@context": [
         "https://www.w3.org/2018/credentials/v1",
         "https://w3id.org/security/suites/secp256k1-2019/v1",
@@ -285,25 +285,25 @@ export class VerificationService {
       verifiableCredential: credentials,
       id: `urn:uuid:${this.generateUUID()}`,
       created: new Date().toISOString(),
-      proof: {
-        type: "EcdsaSecp256k1Signature2019",
-        challenge,
-        domain: verifierDID,
-        created: new Date().toISOString(),
-        verificationMethod: `${holderDID}#keys-1`,
-      },
     };
 
-    const proofStr = JSON.stringify(presentation);
+    // Sign the presentation content WITHOUT the proof (mirrors VC signing flow)
+    const proofStr = JSON.stringify(presentationWithoutProof);
     const proofValue = KeyManagement.signMessage(privateKey, proofStr);
+
+    const proof: Proof = {
+      type: "EcdsaSecp256k1Signature2019",
+      challenge,
+      domain: verifierDID,
+      created: new Date().toISOString(),
+      verificationMethod: `${holderDID}#keys-1`,
+      signatureValue: proofValue,
+    };
 
     return {
       presentation: {
-        ...presentation,
-        proof: {
-          ...presentation.proof,
-          signatureValue: proofValue,
-        },
+        ...(presentationWithoutProof as VerifiablePresentation),
+        proof,
       },
       proofValue,
     };

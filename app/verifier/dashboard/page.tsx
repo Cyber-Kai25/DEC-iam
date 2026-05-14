@@ -2,34 +2,106 @@
 
 import { useRole } from "@/lib/context/role-context";
 import { useIdentity } from "@/lib/context/identity-context";
+import { ProtectedRoute } from "@/components/protected-route";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, CheckCircle2, Mail, BarChart3, TrendingUp } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export default function VerifierDashboard() {
   const { activeRole, activeOrganization } = useRole();
   const { policies, credentials } = useIdentity();
-  const router = useRouter();
+
+  const [verificationCount, setVerificationCount] = useState(0);
+  const [presentations, setPresentations] = useState<any[]>([]);
 
   useEffect(() => {
-    if (activeRole !== "verifier") {
-      router.push("/");
-    }
-  }, [activeRole, router]);
+    void (async () => {
+      try {
+        const [verificationsRes, presentationsRes] = await Promise.all([
+          fetch("/api/verifications", {
+            method: "GET",
+            headers: { "x-active-role": "verifier" },
+            cache: "no-store",
+          }),
+          fetch("/api/presentations", {
+            method: "GET",
+            headers: { "x-active-role": "verifier" },
+            cache: "no-store",
+          }),
+        ]);
+
+        const verificationsJson = await verificationsRes.json();
+        if (verificationsRes.ok && verificationsJson?.success) {
+          setVerificationCount(Array.isArray(verificationsJson.data) ? verificationsJson.data.length : 0);
+        }
+
+        const presentationsJson = await presentationsRes.json();
+        if (presentationsRes.ok && presentationsJson?.success) {
+          setPresentations(Array.isArray(presentationsJson.data) ? presentationsJson.data : []);
+        }
+      } catch (e) {
+        console.error("[v0] Failed to load verifier dashboard stats:", e);
+      }
+    })();
+  }, []);
 
   const verificationPolicies = policies.filter((p) => p.resourceType === "credential");
-  const successRate = 95; // Mock data
-  const totalVerifications = 47; // Mock data
-  const thisMonthVerifications = 12; // Mock data
+
+  const thisMonthVerifications = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return presentations.filter((p) => {
+      const createdAt = p?.createdAt ? new Date(p.createdAt) : null;
+      return createdAt ? createdAt >= start : false;
+    }).length;
+  }, [presentations]);
+
+  const successRate = useMemo(() => {
+    if (presentations.length === 0) return 0;
+    const accepted = presentations.filter((p) => p?.status === "accepted").length;
+    return Math.round((accepted / presentations.length) * 1000) / 10;
+  }, [presentations]);
+
+  const trendRows = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      d.setHours(0, 0, 0, 0);
+      return d;
+    });
+
+    return days.map((day) => {
+      const next = new Date(day);
+      next.setDate(next.getDate() + 1);
+      const dayItems = presentations.filter((p) => {
+        const createdAt = p?.createdAt ? new Date(p.createdAt) : null;
+        return createdAt ? createdAt >= day && createdAt < next : false;
+      });
+      const accepted = dayItems.filter((p) => p?.status === "accepted").length;
+      const rejected = dayItems.filter((p) => p?.status === "rejected").length;
+      const pending = dayItems.filter((p) => p?.status === "pending").length;
+
+      let status: "Verified" | "Pending" | "Failed" = "Pending";
+      if (rejected > 0) status = "Failed";
+      if (accepted > 0 && rejected === 0) status = "Verified";
+      if (accepted === 0 && rejected === 0 && pending === 0) status = "Verified";
+
+      return {
+        day: day.toLocaleDateString(undefined, { weekday: "short" }),
+        count: dayItems.length,
+        status,
+      };
+    });
+  }, [presentations]);
 
   return (
-    <AppShell>
-      <div className="space-y-8">
+    <ProtectedRoute requiredRole="verifier">
+      <AppShell>
+        <div className="space-y-8">
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Credential Verifier Dashboard</h1>
@@ -48,7 +120,7 @@ export default function VerifierDashboard() {
               <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalVerifications}</div>
+              <div className="text-2xl font-bold">{verificationCount}</div>
               <p className="text-xs text-muted-foreground">Credentials verified</p>
             </CardContent>
           </Card>
@@ -155,13 +227,7 @@ export default function VerifierDashboard() {
           <CardContent>
             <div className="space-y-4">
               {[
-                { day: "Mon", count: 2, status: "Verified" },
-                { day: "Tue", count: 3, status: "Verified" },
-                { day: "Wed", count: 2, status: "Verified" },
-                { day: "Thu", count: 1, status: "Pending" },
-                { day: "Fri", count: 2, status: "Verified" },
-                { day: "Sat", count: 1, status: "Failed" },
-                { day: "Sun", count: 1, status: "Verified" },
+                ...trendRows,
               ].map((item) => (
                 <div key={item.day} className="flex items-center justify-between py-2 border-b last:border-0">
                   <div className="flex items-center gap-4 flex-1">
@@ -169,7 +235,7 @@ export default function VerifierDashboard() {
                     <div className="flex-1 bg-muted rounded-full h-2">
                       <div
                         className="bg-gradient-to-r from-purple-500 to-indigo-500 h-2 rounded-full"
-                        style={{ width: `${(item.count / 3) * 100}%` }}
+                        style={{ width: `${Math.min(100, (item.count / 3) * 100)}%` }}
                       ></div>
                     </div>
                   </div>
@@ -192,7 +258,8 @@ export default function VerifierDashboard() {
             </div>
           </CardContent>
         </Card>
-      </div>
-    </AppShell>
+        </div>
+      </AppShell>
+    </ProtectedRoute>
   );
 }

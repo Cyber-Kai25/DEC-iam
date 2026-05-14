@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthContext } from '@/lib/middleware/auth';
 import { RBACService } from '@/lib/services/rbac-service';
 import VerificationService from '@/lib/services/verification-service';
 import SupabaseRepository from '@/lib/services/supabase-repository';
 import BlockchainService from '@/lib/services/blockchain-service';
+import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { ethers } from 'ethers';
 
 /**
@@ -12,17 +13,25 @@ import { ethers } from 'ethers';
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
+    const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
+
     // Check permission
-    const hasPermission = RBACService.getRolePermissions(auth.activeRole).includes('credential:read');
+    const hasPermission =
+      activeRole === 'verifier'
+        ? RBACService.getRolePermissions(activeRole).includes('credential:read:any')
+        : RBACService.getRolePermissions(activeRole).includes('credential:read:own');
     if (!hasPermission) {
       return NextResponse.json(
         { success: false, error: 'Forbidden: No permission to read credentials' },
@@ -31,9 +40,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch credentials from Supabase (role-specific)
-    const credentials = await SupabaseRepository.getCredentials(auth.userId, auth.activeRole);
+    const credentials = await SupabaseRepository.getCredentials(user.id, activeRole);
 
-    console.log('[v0] Fetched credentials for user:', { userId: auth.userId, role: auth.activeRole, count: credentials.length });
+    console.log('[v0] Fetched credentials for user:', { userId: user.id, role: activeRole, count: credentials.length });
 
     return NextResponse.json({
       success: true,
@@ -54,19 +63,32 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
+    const activeRole = (request.headers.get('x-active-role') as any) || 'issuer';
+
     // Check issuer role
-    if (auth.activeRole !== 'issuer') {
+    if (activeRole !== 'issuer') {
       return NextResponse.json(
         { success: false, error: 'Forbidden: Only issuers can issue credentials' },
+        { status: 403 }
+      );
+    }
+
+    const hasPermission = RBACService.getRolePermissions(activeRole).includes('credential:issue');
+    if (!hasPermission) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: No permission to issue credentials' },
         { status: 403 }
       );
     }
@@ -81,29 +103,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create verifiable credential
+    const identities = await SupabaseRepository.getUserIdentities(user.id);
+    const issuerDid = identities[0]?.did;
+    const issuerPrivateKey = identities[0]?.privateKeyHex;
+    if (!issuerDid || !issuerPrivateKey) {
+      return NextResponse.json(
+        { success: false, error: 'No issuer identity found' },
+        { status: 400 }
+      );
+    }
+
+    // Create verifiable credential (signed)
     const issuanceDate = new Date();
-    const expirationDate = new Date(issuanceDate.getTime() + (expirationDays || 365) * 24 * 60 * 60 * 1000);
-    
-    const credential = {
-      "@context": ["https://www.w3.org/2018/credentials/v1"],
-      id: `cred_${Date.now()}`,
-      type: Array.isArray(credentialType)
-        ? credentialType
-        : ["VerifiableCredential", credentialType],
-      issuer: `did:ethr:11155111:${auth.userId}`,
-      issuanceDate: issuanceDate.toISOString(),
-      expirationDate: expirationDate.toISOString(),
-      credentialSubject: {
-        id: subjectDid,
-        ...claims,
-      },
-      proof: {
-        type: 'Ed25519Signature2018',
-        created: issuanceDate.toISOString(),
-        verificationMethod: `did:ethr:11155111:${auth.userId}#key-1`,
-      },
-    };
+
+    const credential = VerificationService.createVerifiableCredential(
+      issuerDid,
+      subjectDid,
+      Array.isArray(credentialType) ? String(credentialType[credentialType.length - 1]) : String(credentialType),
+      (claims || {}) as Record<string, unknown>,
+      issuerPrivateKey,
+      expirationDays || 365
+    );
 
     // === DUAL-WRITE PATTERN ===
     // 1. Hash credential for blockchain anchoring
@@ -111,11 +131,35 @@ export async function POST(request: NextRequest) {
     console.log('[v0] Credential hash created:', credentialHash.slice(0, 16));
 
     // 2. Save to Supabase (fast, queryable)
-    const savedCredential = await SupabaseRepository.saveCredential(credential, auth.userId);
+    const admin = createAdminClient();
+    const { data: row, error: saveError } = await admin
+      .from('verifiable_credentials')
+      .upsert(
+        {
+          credential_id: (credential as any).id,
+          issuer_did: (credential as any).issuer,
+          subject_did: (credential as any).credentialSubject?.id || '',
+          credential_type: (credential as any).type,
+          issuance_date: new Date((credential as any).issuanceDate).toISOString(),
+          expiration_date: (credential as any).expirationDate
+            ? new Date((credential as any).expirationDate).toISOString()
+            : null,
+          credential_subject: (credential as any).credentialSubject,
+          proof: (credential as any).proof,
+          credential_json: credential as any,
+          status: 'active',
+          blockchain_hash: null,
+        },
+        { onConflict: 'credential_id' }
+      )
+      .select()
+      .single();
+
+    const savedCredential = !saveError && row ? (SupabaseRepository as any).mapCredentialFromDB(row) : null;
     
     if (!savedCredential) {
       return NextResponse.json(
-        { success: false, error: 'Failed to persist credential to database' },
+        { success: false, error: (saveError as any)?.message || 'Failed to persist credential to database' },
         { status: 500 }
       );
     }
@@ -127,7 +171,7 @@ export async function POST(request: NextRequest) {
     try {
       blockchainTx = await BlockchainService.issueCredentialOnChain(
         credentialHash,
-        auth.userId,
+        issuerDid,
         subjectDid,
         expirationDays || 365
       );

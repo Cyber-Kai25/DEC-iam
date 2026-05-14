@@ -2,36 +2,36 @@
 
 import { useRole } from "@/lib/context/role-context";
 import { useIdentity } from "@/lib/context/identity-context";
+import { ProtectedRoute } from "@/components/protected-route";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Award, TrendingUp, CheckCircle2, Clock } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 
 export default function IssuerDashboard() {
   const { activeRole, activeOrganization } = useRole();
   const { credentials } = useIdentity();
-  const router = useRouter();
 
-  useEffect(() => {
-    if (activeRole !== "issuer") {
-      router.push("/");
-    }
-  }, [activeRole, router]);
-
-  const issuedCredentials = credentials.filter((c) => c.issuer); // Would be filtered by organization
+  const issuedCredentials = credentials.filter((c) => c.issuer);
   const totalIssued = issuedCredentials.length;
   const activeCredentials = issuedCredentials.filter(
     (c) => !c.expirationDate || new Date(c.expirationDate) > new Date()
   ).length;
   const expiredCredentials = totalIssued - activeCredentials;
 
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const thisMonthIssued = issuedCredentials.filter((c) => {
+    const issuedAt = c.issuanceDate ? new Date(c.issuanceDate) : null;
+    return issuedAt ? issuedAt >= monthStart : false;
+  }).length;
+
   return (
-    <AppShell>
-      <div className="space-y-8">
+    <ProtectedRoute requiredRole="issuer">
+      <AppShell>
+        <div className="space-y-8">
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Credential Issuer Dashboard</h1>
@@ -76,7 +76,7 @@ export default function IssuerDashboard() {
               <p className="text-xs text-muted-foreground">Expired credentials</p>
             </CardContent>
           </Card>
-
+{thisMonthIssued}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">This Month</CardTitle>
@@ -174,7 +174,8 @@ export default function IssuerDashboard() {
             </div>
           </CardContent>
         </Card>
-      </div>
-    </AppShell>
+        </div>
+      </AppShell>
+    </ProtectedRoute>
   );
 }

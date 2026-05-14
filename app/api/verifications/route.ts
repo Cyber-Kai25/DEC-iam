@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthContext } from '@/lib/middleware/auth';
 import { RBACService } from '@/lib/services/rbac-service';
 import SupabaseRepository from '@/lib/services/supabase-repository';
+import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { ethers } from 'ethers';
+import crypto from 'crypto';
 
 /**
  * GET /api/verifications
@@ -10,22 +12,34 @@ import { ethers } from 'ethers';
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+    const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
+    const hasPermission = RBACService.getRolePermissions(activeRole).includes('verification:read:own');
+    if (!hasPermission) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: No permission to read verifications' },
+        { status: 403 }
+      );
+    }
+
+    const identities = await SupabaseRepository.getUserIdentities(user.id);
     const did = identities[0]?.did;
     if (!did) {
       return NextResponse.json({ success: true, data: [] });
     }
 
-    const direction = auth.activeRole === 'owner' ? 'inbox' : 'outbox';
+    const direction = activeRole === 'owner' ? 'inbox' : 'outbox';
     const messages = await SupabaseRepository.getDataExchangeMessagesForDid(
       did,
       direction
@@ -45,7 +59,7 @@ export async function GET(request: NextRequest) {
         responsePayload: m.encryptedData,
       }));
 
-    console.log('[v0] Fetched verifications for user:', { userId: auth.userId, role: auth.activeRole, count: verifications.length });
+    console.log('[v0] Fetched verifications for user:', { userId: user.id, role: activeRole, count: verifications.length });
 
     return NextResponse.json({
       success: true,
@@ -66,19 +80,32 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
+    if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
+    const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
+
     const body = await request.json();
     const { action, subjectDid, requestedCredentials, response, requestId, presentation } = body;
 
-    if (action === 'create' && auth.activeRole === 'verifier') {
+    if (action === 'create' && activeRole === 'verifier') {
+      const hasPermission = RBACService.getRolePermissions(activeRole).includes('verification:create');
+      if (!hasPermission) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: No permission to create verification requests' },
+          { status: 403 }
+        );
+      }
+
       // Create verification request
       if (!subjectDid || !requestedCredentials) {
         return NextResponse.json(
@@ -87,7 +114,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const identities = await SupabaseRepository.getUserIdentities(auth.userId);
+      const identities = await SupabaseRepository.getUserIdentities(user.id);
       const verifierDid = identities[0]?.did;
       if (!verifierDid) {
         return NextResponse.json(
@@ -123,7 +150,37 @@ export async function POST(request: NextRequest) {
         status: 'pending' as const,
       };
 
-      const saved = await SupabaseRepository.saveDataExchangeMessage(message);
+      const admin = createAdminClient();
+      const { data: savedRow, error: saveError } = await admin
+        .from('data_exchange_messages')
+        .upsert(
+          {
+            message_id: message.id,
+            from_did: message.from,
+            to_did: message.to,
+            data_hash: message.dataHash,
+            encrypted_data: message.encryptedData,
+            encryption_algorithm: message.encryptionAlgorithm,
+            nonce: message.nonce,
+            status: message.status,
+            credential_request: (message.credentialRequest || null) as any,
+            expires_at: message.expiresAt ? new Date(message.expiresAt) : null,
+            read_at: null,
+          },
+          { onConflict: 'message_id' }
+        )
+        .select()
+        .single();
+
+      if (saveError || !savedRow) {
+        console.error('[v0] Failed to persist verification request (admin upsert):', saveError);
+        return NextResponse.json(
+          { success: false, error: (saveError as any)?.message || 'Failed to persist verification request' },
+          { status: 500 }
+        );
+      }
+
+      const saved = (savedRow ? (SupabaseRepository as any).mapDataExchangeMessageFromDB(savedRow) : null) as any;
       if (!saved) {
         return NextResponse.json(
           { success: false, error: 'Failed to persist verification request' },
@@ -137,7 +194,15 @@ export async function POST(request: NextRequest) {
         { success: true, data: saved },
         { status: 201 }
       );
-    } else if (action === 'respond' && auth.activeRole === 'owner') {
+    } else if (action === 'respond' && activeRole === 'owner') {
+      const hasPermission = RBACService.getRolePermissions(activeRole).includes('verification:respond');
+      if (!hasPermission) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: No permission to respond to verifications' },
+          { status: 403 }
+        );
+      }
+
       // Respond to verification request
       if (!requestId || !response) {
         return NextResponse.json(
@@ -154,20 +219,25 @@ export async function POST(request: NextRequest) {
         presentation: presentation || null,
       });
 
-      const updated = await SupabaseRepository.updateDataExchangeMessageStatus(
-        requestId,
-        nextStatus,
-        responsePayload
-      );
+      const admin = createAdminClient();
+      const { data: updatedRow, error: updateError } = await admin
+        .from('data_exchange_messages')
+        .update({ status: nextStatus, encrypted_data: responsePayload })
+        .eq('message_id', requestId)
+        .select()
+        .single();
 
-      if (!updated) {
+      if (updateError || !updatedRow) {
+        console.error('[v0] Failed to persist verification response (admin update):', updateError);
         return NextResponse.json(
-          { success: false, error: 'Failed to persist verification response' },
+          { success: false, error: (updateError as any)?.message || 'Failed to persist verification response' },
           { status: 500 }
         );
       }
 
-      console.log('[v0] Owner responded to verification:', { requestId, response });
+      const updated = (SupabaseRepository as any).mapDataExchangeMessageFromDB(updatedRow) as any;
+
+      console.log('[v0] Owner responded to verification:', { requestId, response, userId: user.id });
 
       return NextResponse.json({
         success: true,

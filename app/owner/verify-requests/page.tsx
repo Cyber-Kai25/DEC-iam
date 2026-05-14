@@ -32,7 +32,10 @@ export default function OwnerVerifyRequestsPage() {
   const loadRequests = async () => {
     try {
       setIsLoading(true);
-      const res = await fetch("/api/verifications", { cache: "no-store" });
+      const res = await fetch("/api/verifications", {
+        cache: "no-store",
+        headers: { "x-active-role": "owner" },
+      });
       const json = await res.json();
       if (!res.ok || !json?.success) {
         throw new Error(json?.error || "Failed to load verification requests");
@@ -84,7 +87,7 @@ export default function OwnerVerifyRequestsPage() {
 
       const res = await fetch("/api/verifications", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-active-role": "owner" },
         body: JSON.stringify({
           action: "respond",
           requestId: id,
@@ -108,7 +111,7 @@ export default function OwnerVerifyRequestsPage() {
     try {
       const res = await fetch("/api/verifications", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-active-role": "owner" },
         body: JSON.stringify({
           action: "respond",
           requestId: id,

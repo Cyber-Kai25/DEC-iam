@@ -10,6 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -56,26 +57,24 @@ export function RoleSwitcher() {
     return null;
   }
 
-  if (roles.length === 0) {
-    return null;
-  }
-
   return (
     <DropdownMenu>
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-2 bg-transparent"
-        disabled={isSwitching}
-      >
-        {isSwitching ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <RoleIcon className="h-4 w-4" />
-        )}
-        <span className="hidden sm:inline text-sm">{roleDisplay}</span>
-        <ChevronDown className="h-4 w-4 opacity-50" />
-      </Button>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2 bg-transparent"
+          disabled={isSwitching}
+        >
+          {isSwitching ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RoleIcon className="h-4 w-4" />
+          )}
+          <span className="hidden sm:inline text-sm">{roleDisplay}</span>
+          <ChevronDown className="h-4 w-4 opacity-50" />
+        </Button>
+      </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel>Switch Role</DropdownMenuLabel>
