@@ -24,17 +24,17 @@ export function ProtectedRoute({
 
   useEffect(() => {
     if (!isAuthenticated) {
-      router.push("/roles");
+      router.replace("/roles");
       return;
     }
 
     if (requiredRole && activeRole !== requiredRole) {
-      router.push("/");
+      router.replace(`/${activeRole}/dashboard`);
       return;
     }
 
     if (requiredPermission && !hasPermission(requiredPermission)) {
-      router.push("/");
+      router.replace(`/${activeRole}/dashboard`);
       return;
     }
   }, [isAuthenticated, activeRole, hasPermission, requiredRole, requiredPermission, router]);
@@ -50,33 +50,15 @@ export function ProtectedRoute({
     );
   }
 
-  if (requiredRole && activeRole !== requiredRole) {
+  if (
+    (requiredRole && activeRole !== requiredRole) ||
+    (requiredPermission && !hasPermission(requiredPermission))
+  ) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-red-600 mb-4">Access Denied: This page requires {requiredRole} role</p>
-          <button
-            onClick={() => router.push("/")}
-            className="text-blue-600 hover:underline"
-          >
-            Return to home
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (requiredPermission && !hasPermission(requiredPermission)) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <p className="text-red-600 mb-4">Access Denied: Insufficient permissions</p>
-          <button
-            onClick={() => router.push("/")}
-            className="text-blue-600 hover:underline"
-          >
-            Return to home
-          </button>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
+          <p className="text-muted-foreground">Redirecting...</p>
         </div>
       </div>
     );
