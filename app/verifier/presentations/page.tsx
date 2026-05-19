@@ -79,21 +79,58 @@ export default function VerifierPresentationsInboxPage() {
   };
 
   const handleVerify = (item: PresentationItem) => {
-    try {
-      if (!item.presentation) {
-        toast.error("No presentation payload");
-        return;
+    void (async () => {
+      try {
+        if (!item.presentation) {
+          toast.error("No presentation payload");
+          return;
+        }
+
+        const holderAddress = extractHolderAddress(item.presentation);
+        const result = VerificationService.verifyPresentation(item.presentation, holderAddress);
+        if (!result.valid) {
+          toast.error(result.error || "Presentation verification failed");
+          return;
+        }
+
+        const vcs = Array.isArray(item.presentation?.verifiableCredential)
+          ? item.presentation.verifiableCredential
+          : [];
+
+        const createEventPromises = vcs.map((vc: any) => {
+          const types = Array.isArray(vc?.type) ? vc.type : [];
+          const credentialType =
+            types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
+          const issuerDid = typeof vc?.issuer === "string" ? vc.issuer : "";
+          const subjectDid = typeof vc?.credentialSubject?.id === "string" ? vc.credentialSubject.id : "";
+          const credentialId = typeof vc?.id === "string" ? vc.id : "";
+
+          return fetch("/api/verification-events", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-active-role": "verifier",
+            },
+            body: JSON.stringify({
+              subjectDid,
+              issuerDid,
+              credentialId,
+              credentialType,
+              presentationId: item.id,
+              result: "valid",
+              details: {
+                presentationFromDid: item.fromDid,
+              },
+            }),
+          });
+        });
+
+        await Promise.allSettled(createEventPromises);
+        toast.success("Presentation verified");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Presentation verification failed");
       }
-      const holderAddress = extractHolderAddress(item.presentation);
-      const result = VerificationService.verifyPresentation(item.presentation, holderAddress);
-      if (!result.valid) {
-        toast.error(result.error || "Presentation verification failed");
-        return;
-      }
-      toast.success("Presentation verified");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Presentation verification failed");
-    }
+    })();
   };
 
   return (

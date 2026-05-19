@@ -6,6 +6,80 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- ==========================================================================
+-- PROFILES TABLE (Supabase auth integration)
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  full_name TEXT,
+  avatar_url TEXT,
+  roles TEXT[] DEFAULT ARRAY['owner'],
+  organization_id UUID,
+  phone TEXT,
+  preferences JSONB DEFAULT '{}',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
+CREATE POLICY "Users can view their own profile"
+  ON public.profiles FOR SELECT
+  USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
+CREATE POLICY "Users can update their own profile"
+  ON public.profiles FOR UPDATE
+  USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Authenticated users can insert their own profile" ON public.profiles;
+CREATE POLICY "Authenticated users can insert their own profile"
+  ON public.profiles FOR INSERT
+  WITH CHECK (auth.uid() = id);
+
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  roles_arr TEXT[];
+BEGIN
+  roles_arr := ARRAY['owner'];
+
+  IF new.raw_user_meta_data ? 'roles' THEN
+    IF jsonb_typeof(new.raw_user_meta_data->'roles') = 'array' THEN
+      SELECT array_agg(value) INTO roles_arr
+      FROM jsonb_array_elements_text(new.raw_user_meta_data->'roles');
+    ELSIF jsonb_typeof(new.raw_user_meta_data->'roles') = 'string' THEN
+      roles_arr := ARRAY[new.raw_user_meta_data->>'roles'];
+    END IF;
+  END IF;
+
+  INSERT INTO public.profiles (id, email, full_name, roles)
+  VALUES (
+    new.id,
+    new.email,
+    COALESCE(new.raw_user_meta_data ->> 'full_name', ''),
+    COALESCE(roles_arr, ARRAY['owner'])
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+    roles = COALESCE(EXCLUDED.roles, public.profiles.roles);
+
+  RETURN new;
+EXCEPTION
+  WHEN undefined_table THEN
+    -- If profiles table wasn't created yet, never block signup.
+    RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
 -- ============================================================================
 -- IDENTITIES TABLE
 -- ============================================================================
@@ -26,6 +100,41 @@ CREATE TABLE IF NOT EXISTS identities (
 
 CREATE INDEX idx_identities_did ON identities(did);
 CREATE INDEX idx_identities_wallet ON identities(wallet_address);
+
+-- ============================================================================
+-- ORGANIZATIONS TABLE (single row per organization)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS organizations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  description TEXT,
+  did TEXT UNIQUE,
+  public_key TEXT,
+  issuer_enabled BOOLEAN DEFAULT FALSE,
+  verifier_enabled BOOLEAN DEFAULT FALSE,
+  verified_at TIMESTAMP WITH TIME ZONE,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_organizations_did ON organizations(did);
+CREATE INDEX idx_organizations_verifier ON organizations(verifier_enabled) WHERE verifier_enabled = TRUE;
+
+-- ============================================================================
+-- ORGANIZATION MEMBERSHIPS TABLE (user ↔ org with roles)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS organization_memberships (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'issuer_operator', 'verifier_operator')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, organization_id, role)
+);
+
+CREATE INDEX idx_org_memberships_user ON organization_memberships(user_id);
+CREATE INDEX idx_org_memberships_org ON organization_memberships(organization_id);
 
 -- ============================================================================
 -- VERIFIABLE CREDENTIALS TABLE
@@ -120,6 +229,30 @@ CREATE INDEX idx_messages_to ON data_exchange_messages(to_did);
 CREATE INDEX idx_messages_status ON data_exchange_messages(status);
 CREATE INDEX idx_messages_created ON data_exchange_messages(created_at);
 CREATE INDEX idx_messages_expires ON data_exchange_messages(expires_at);
+
+-- ============================================================================
+-- VERIFICATION EVENTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS verification_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  verifier_org_did TEXT NOT NULL,
+  subject_did TEXT,
+  issuer_did TEXT,
+  credential_id TEXT,
+  credential_type TEXT,
+  presentation_id TEXT,
+  result VARCHAR(20) NOT NULL CHECK (result IN ('valid', 'invalid', 'expired')),
+  verified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  details JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_verifier_org_did FOREIGN KEY (verifier_org_did) REFERENCES identities(did) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_verification_events_verifier_org ON verification_events(verifier_org_did);
+CREATE INDEX idx_verification_events_verified_at ON verification_events(verified_at);
+CREATE INDEX idx_verification_events_result ON verification_events(result);
+CREATE INDEX idx_verification_events_issuer ON verification_events(issuer_did);
+CREATE INDEX idx_verification_events_subject ON verification_events(subject_did);
 
 -- ============================================================================
 -- AUDIT LOG TABLE

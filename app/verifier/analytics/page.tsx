@@ -8,54 +8,48 @@ import { TrendingUp, AlertCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 export default function VerifierAnalyticsPage() {
-  const [presentations, setPresentations] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
 
   useEffect(() => {
     void (async () => {
       try {
-        const res = await fetch("/api/presentations", {
+        const res = await fetch("/api/verification-events", {
           method: "GET",
           headers: { "x-active-role": "verifier" },
           cache: "no-store",
         });
         const json = await res.json();
         if (!res.ok || !json?.success) {
-          setPresentations([]);
+          setEvents([]);
           return;
         }
-        setPresentations(Array.isArray(json.data) ? json.data : []);
+        setEvents(Array.isArray(json.data) ? json.data : []);
       } catch (e) {
         console.error("[v0] Failed to load verifier analytics:", e);
-        setPresentations([]);
+        setEvents([]);
       }
     })();
   }, []);
 
   const metrics = useMemo(() => {
-    const totalVerifications = presentations.length;
-    const accepted = presentations.filter((p) => p?.status === "accepted").length;
-    const successRate = totalVerifications === 0 ? 0 : Math.round((accepted / totalVerifications) * 1000) / 10;
+    const totalVerifications = events.length;
+    const validCount = events.filter((e) => e?.result === "valid").length;
+    const successRate = totalVerifications === 0 ? 0 : Math.round((validCount / totalVerifications) * 1000) / 10;
 
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthVerifications = presentations.filter((p) => {
-      const createdAt = p?.createdAt ? new Date(p.createdAt) : null;
+    const thisMonthVerifications = events.filter((ev) => {
+      const createdAt = ev?.verified_at ? new Date(ev.verified_at) : null;
       return createdAt ? createdAt >= start : false;
     }).length;
-
-    const allCredentials = presentations.flatMap((p) => {
-      const vc = p?.presentation?.verifiableCredential;
-      return Array.isArray(vc) ? vc : [];
-    });
 
     const byType = new Map<string, number>();
     const byIssuer = new Map<string, number>();
 
-    for (const cred of allCredentials) {
-      const types = Array.isArray(cred?.type) ? cred.type : [];
-      const type = types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
+    for (const ev of events) {
+      const type = typeof ev?.credential_type === "string" ? ev.credential_type : "";
       if (type) byType.set(type, (byType.get(type) || 0) + 1);
-      const issuer = typeof cred?.issuer === "string" ? cred.issuer : "";
+      const issuer = typeof ev?.issuer_did === "string" ? ev.issuer_did : "";
       if (issuer) byIssuer.set(issuer, (byIssuer.get(issuer) || 0) + 1);
     }
 
@@ -71,7 +65,7 @@ export default function VerifierAnalyticsPage() {
       topIssuer,
       byType,
     };
-  }, [presentations]);
+  }, [events]);
 
   return (
     <ProtectedRoute requiredRole="verifier">

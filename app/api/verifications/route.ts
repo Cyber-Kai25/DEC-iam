@@ -3,6 +3,7 @@ import { RBACService } from '@/lib/services/rbac-service';
 import SupabaseRepository from '@/lib/services/supabase-repository';
 import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getOrganizationDid } from '@/lib/services/organization-service';
 import { ethers } from 'ethers';
 import crypto from 'crypto';
 
@@ -33,8 +34,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(user.id);
-    const did = identities[0]?.did;
+    const admin = createAdminClient();
+
+    let did: string | undefined;
+    if (activeRole === 'verifier') {
+      did = (await getOrganizationDid(admin, user.id)) || undefined;
+    } else {
+      const identities = await SupabaseRepository.getUserIdentities(user.id);
+      did = identities[0]?.did;
+    }
+
     if (!did) {
       return NextResponse.json({ success: true, data: [] });
     }
@@ -114,11 +123,15 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const identities = await SupabaseRepository.getUserIdentities(user.id);
-      const verifierDid = identities[0]?.did;
+      const admin = createAdminClient();
+      const verifierDid = await getOrganizationDid(admin, user.id);
       if (!verifierDid) {
         return NextResponse.json(
-          { success: false, error: 'No verifier identity found' },
+          {
+            success: false,
+            error:
+              'No verifier organization identity found. Visit Verifier > Organization to initialize your organization DID.',
+          },
           { status: 400 }
         );
       }
@@ -150,7 +163,6 @@ export async function POST(request: NextRequest) {
         status: 'pending' as const,
       };
 
-      const admin = createAdminClient();
       const { data: savedRow, error: saveError } = await admin
         .from('data_exchange_messages')
         .upsert(

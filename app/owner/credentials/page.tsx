@@ -8,12 +8,53 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CredentialCard } from "@/components/credential-card";
-import { FileCheck } from "lucide-react";
+import { FileCheck, Check, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
 import VerificationService from "@/lib/services/verification-service";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { cn } from "@/lib/utils";
+import { useEffect, useMemo, useState } from "react";
 
 export default function OwnerCredentialsPage() {
   const { credentials, currentIdentity } = useIdentity();
+
+  const [presentCredential, setPresentCredential] = useState<any | null>(null);
+  const [isPresentOpen, setIsPresentOpen] = useState(false);
+  const [directory, setDirectory] = useState<Array<{ did: string; name: string; description?: string }>>([]);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
+  const [selectedVerifierDid, setSelectedVerifierDid] = useState<string>("");
+  const [isVerifierPickerOpen, setIsVerifierPickerOpen] = useState(false);
+  const [isSendingPresentation, setIsSendingPresentation] = useState(false);
+
+  const selectedVerifier = useMemo(() => {
+    if (!selectedVerifierDid) return null;
+    return directory.find((d) => d.did === selectedVerifierDid) || null;
+  }, [directory, selectedVerifierDid]);
+
+  useEffect(() => {
+    if (!isPresentOpen) return;
+    if (directory.length > 0 || isLoadingDirectory) return;
+    void (async () => {
+      try {
+        setDirectoryError(null);
+        setIsLoadingDirectory(true);
+        const res = await fetch("/api/organizations/directory");
+        const json = await res.json();
+        if (!res.ok || !json?.success) {
+          setDirectoryError(json?.error || "Failed to load organizations");
+          return;
+        }
+        setDirectory(Array.isArray(json.data) ? json.data : []);
+      } catch (e) {
+        setDirectoryError(e instanceof Error ? e.message : "Failed to load organizations");
+      } finally {
+        setIsLoadingDirectory(false);
+      }
+    })();
+  }, [directory.length, isLoadingDirectory, isPresentOpen]);
 
   const activeCredentials = credentials.filter(
     (c) => !c.expirationDate || new Date(c.expirationDate) > new Date()
@@ -53,42 +94,44 @@ export default function OwnerCredentialsPage() {
   };
 
   const handlePresentCredential = (credential: any) => {
+    setPresentCredential(credential);
+    setSelectedVerifierDid("");
+    setIsPresentOpen(true);
+  };
+
+  const handleSendPresentation = async () => {
     try {
+      if (!presentCredential) return;
       if (!currentIdentity?.privateKeyHex) {
         toast.error("No identity private key available");
         return;
       }
-      const verifierDid = window.prompt("Enter verifier DID");
-      if (!verifierDid) {
+      if (!selectedVerifierDid) {
+        toast.error("Select a verifier organization");
         return;
       }
+
+      setIsSendingPresentation(true);
       const challenge = crypto.randomUUID();
       const result = VerificationService.createPresentation(
-        [credential],
+        [presentCredential],
         currentIdentity.did,
-        verifierDid,
+        selectedVerifierDid,
         challenge,
         currentIdentity.privateKeyHex
       );
       const presentation = result.presentation;
 
-      void (async () => {
-        try {
-          const res = await fetch('/api/presentations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-active-role': 'owner' },
-            body: JSON.stringify({ verifierDid, presentation }),
-          });
-          const json = await res.json();
-          if (!res.ok || !json?.success) {
-            toast.error(json?.error || 'Failed to deliver presentation');
-            return;
-          }
-          toast.success('Presentation delivered to verifier');
-        } catch (e) {
-          toast.error(e instanceof Error ? e.message : 'Failed to deliver presentation');
-        }
-      })();
+      const res = await fetch("/api/presentations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-active-role": "owner" },
+        body: JSON.stringify({ verifierDid: selectedVerifierDid, presentation }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error || "Failed to deliver presentation");
+        return;
+      }
 
       const blob = new Blob([JSON.stringify(presentation, null, 2)], {
         type: "application/json",
@@ -96,12 +139,17 @@ export default function OwnerCredentialsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `presentation-${credential.id}.json`;
+      a.download = `presentation-${presentCredential.id}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("Presentation created");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create presentation");
+
+      toast.success("Presentation delivered to verifier");
+      setIsPresentOpen(false);
+      setPresentCredential(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to deliver presentation");
+    } finally {
+      setIsSendingPresentation(false);
     }
   };
 
@@ -109,6 +157,76 @@ export default function OwnerCredentialsPage() {
     <ProtectedRoute requiredRole="owner" requiredPermission="receive:credential">
       <AppShell>
         <div className="space-y-8">
+          <Dialog open={isPresentOpen} onOpenChange={setIsPresentOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Present Credential</DialogTitle>
+                <DialogDescription>Select the verifier organization to receive your presentation.</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-muted-foreground">Verifier Organization</label>
+                <Popover open={isVerifierPickerOpen} onOpenChange={setIsVerifierPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={isVerifierPickerOpen}
+                      className="w-full justify-between"
+                      disabled={isLoadingDirectory}
+                    >
+                      {selectedVerifier ? selectedVerifier.name : isLoadingDirectory ? "Loading..." : "Select verifier organization"}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search organizations..." />
+                      <CommandList>
+                        <CommandEmpty>No organizations found.</CommandEmpty>
+                        <CommandGroup>
+                          {directory.map((o) => (
+                            <CommandItem
+                              key={o.did}
+                              value={`${o.name} ${o.did}`}
+                              onSelect={() => {
+                                setSelectedVerifierDid(o.did);
+                                setIsVerifierPickerOpen(false);
+                              }}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", selectedVerifierDid === o.did ? "opacity-100" : "opacity-0")} />
+                              <div className="flex flex-col">
+                                <span>{o.name}</span>
+                                <span className="text-xs text-muted-foreground font-mono break-all">{o.did}</span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {!!directoryError && <div className="text-sm text-destructive">{directoryError}</div>}
+              </div>
+
+              {!!selectedVerifier && (
+                <div className="rounded-md border p-3 text-sm">
+                  <div className="font-medium">Destination DID</div>
+                  <div className="text-muted-foreground font-mono break-all">{selectedVerifier.did}</div>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsPresentOpen(false)} disabled={isSendingPresentation}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSendPresentation} disabled={!selectedVerifierDid || isSendingPresentation}>
+                  {isSendingPresentation ? "Sending..." : "Send Presentation"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           {/* Header */}
           <div>
             <h1 className="text-3xl font-bold tracking-tight">My Credentials</h1>

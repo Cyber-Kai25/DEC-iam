@@ -3,6 +3,7 @@ import SupabaseRepository from '@/lib/services/supabase-repository';
 import { RBACService } from '@/lib/services/rbac-service';
 import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getOrganizationDid } from '@/lib/services/organization-service';
 import { ethers } from 'ethers';
 
 /**
@@ -35,24 +36,50 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(user.id);
-    const did = identities[0]?.did;
-    if (!did) {
-      return NextResponse.json({ success: true, data: [] });
-    }
+    const admin = createAdminClient();
 
     const direction = activeRole === 'verifier' ? 'inbox' : 'outbox';
-    const messages = await SupabaseRepository.getDataExchangeMessagesForDid(
-      did,
-      direction
-    );
+
+    let messages: any[] = [];
+
+    if (activeRole === 'verifier') {
+      const orgDid = (await getOrganizationDid(admin, user.id)) || undefined;
+      const identities = await SupabaseRepository.getUserIdentities(user.id);
+      const personalDid = identities[0]?.did;
+
+      const dids = [orgDid, personalDid].filter((d): d is string => typeof d === 'string' && d.length > 0);
+      if (dids.length === 0) {
+        return NextResponse.json({ success: true, data: [] });
+      }
+
+      const chunks = await Promise.all(
+        dids.map((d) => SupabaseRepository.getDataExchangeMessagesForDid(d, direction))
+      );
+
+      const merged = chunks.flat();
+      const unique = new Map<string, any>();
+      for (const m of merged) {
+        unique.set(String(m.id), m);
+      }
+      messages = [...unique.values()];
+    } else {
+      const identities = await SupabaseRepository.getUserIdentities(user.id);
+      const did = identities[0]?.did;
+      if (!did) {
+        return NextResponse.json({ success: true, data: [] });
+      }
+
+      messages = await SupabaseRepository.getDataExchangeMessagesForDid(did, direction);
+    }
 
     const presentations = messages
       .filter((m) => {
         if (!m.encryptedData) return false;
         try {
           const parsed = JSON.parse(m.encryptedData);
-          return parsed?.kind === 'presentation';
+          if (parsed?.kind === 'presentation' && parsed?.presentation) return true;
+          if (parsed?.kind === 'verification-response' && parsed?.presentation) return true;
+          return false;
         } catch {
           return false;
         }
@@ -65,6 +92,8 @@ export async function GET(request: NextRequest) {
           parsed = null;
         }
 
+        const presentation = parsed?.presentation || null;
+
         return {
           id: m.id,
           fromDid: m.from,
@@ -72,7 +101,7 @@ export async function GET(request: NextRequest) {
           status: m.status,
           createdAt: m.timestamp,
           expiresAt: m.expiresAt,
-          presentation: parsed?.presentation || null,
+          presentation,
         };
       });
 

@@ -312,7 +312,8 @@ class RoleManagementService {
     return {
       id: `org-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
-      type,
+      issuerEnabled: type === "issuer",
+      verifierEnabled: type === "verifier",
       description,
       createdAt: new Date(),
       updatedAt: new Date(),

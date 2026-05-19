@@ -46,6 +46,17 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
+  const normalizeOrganization = (org: any): Organization => {
+    return {
+      ...org,
+      issuerEnabled: !!org?.issuerEnabled,
+      verifierEnabled: !!org?.verifierEnabled,
+      verifiedAt: org?.verifiedAt || undefined,
+      createdAt: org?.createdAt ? new Date(org.createdAt) : new Date(),
+      updatedAt: org?.updatedAt ? new Date(org.updatedAt) : new Date(),
+    };
+  };
+
   const setCurrentUserAndPersist = (user: User) => {
     setCurrentUser(user);
 
@@ -73,6 +84,58 @@ export function RoleProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     loadUserState();
   }, []);
+
+  useEffect(() => {
+    const fetchOrganization = async () => {
+      if (!currentUser) return;
+      if (activeRole !== "issuer" && activeRole !== "verifier") return;
+
+      try {
+        const res = await fetch("/api/organizations", {
+          method: "GET",
+          headers: {
+            "x-active-role": activeRole,
+          },
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          console.warn("[v0] Failed to load organization:", res.status, err);
+          return;
+        }
+
+        const payload = await res.json();
+        if (!payload?.success || !payload?.data) {
+          return;
+        }
+
+        const org = normalizeOrganization(payload.data);
+        setOrganizations([org]);
+        setActiveOrganization(org);
+
+        try {
+          const stored = localStorage.getItem("role-app-state");
+          const state = stored ? JSON.parse(stored) : {};
+          localStorage.setItem(
+            "role-app-state",
+            JSON.stringify({
+              ...state,
+              user: state.user || currentUser,
+              activeRole,
+              activeOrganization: org,
+              organizations: [org],
+            })
+          );
+        } catch (err) {
+          console.error("[v0] Error persisting organization state:", err);
+        }
+      } catch (err) {
+        console.error("[v0] Error fetching organization:", err);
+      }
+    };
+
+    fetchOrganization();
+  }, [currentUser?.id, activeRole]);
 
   // Validate and sync activeRole with currentUser
   useEffect(() => {

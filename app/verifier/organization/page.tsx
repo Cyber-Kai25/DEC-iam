@@ -8,14 +8,53 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Edit2, Copy, Save, Settings } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 export default function VerifierOrganizationPage() {
-  const { activeOrganization, organizations } = useRole();
+  const { activeOrganization, organizations, setActiveOrganization } = useRole();
   const [isEditing, setIsEditing] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const org = activeOrganization || organizations[0];
+
+  useEffect(() => {
+    setDraftName(org?.name || "");
+    setDraftDescription(org?.description || "");
+  }, [org?.id]);
+
+  const handleToggleEdit = () => {
+    if (!org) return;
+    if (!isEditing) {
+      setIsEditing(true);
+      return;
+    }
+    void (async () => {
+      try {
+        setIsSaving(true);
+        const res = await fetch("/api/organizations", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "x-active-role": "verifier" },
+          body: JSON.stringify({ name: draftName, description: draftDescription }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json?.success) {
+          toast.error(json?.error || "Failed to update organization");
+          return;
+        }
+
+        setActiveOrganization(json.data);
+        toast.success("Organization updated");
+        setIsEditing(false);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to update organization");
+      } finally {
+        setIsSaving(false);
+      }
+    })();
+  };
 
   const handleCopyDID = () => {
     if (org?.didDocument?.id) {
@@ -36,7 +75,11 @@ export default function VerifierOrganizationPage() {
                 Manage your credential verifier organization
               </p>
             </div>
-            <Button onClick={() => setIsEditing(!isEditing)} variant={isEditing ? "default" : "outline"}>
+            <Button
+              onClick={handleToggleEdit}
+              variant={isEditing ? "default" : "outline"}
+              disabled={!org || isSaving}
+            >
               {isEditing ? (
                 <>
                   <Save className="h-4 w-4 mr-2" />
@@ -72,19 +115,33 @@ export default function VerifierOrganizationPage() {
                         <label className="text-sm font-medium text-muted-foreground">Organization Name</label>
                         <input
                           type="text"
-                          value={org.name}
+                          value={draftName}
+                          onChange={(e) => setDraftName(e.target.value)}
                           disabled={!isEditing}
                           className="w-full p-2 border rounded-lg bg-muted disabled:opacity-50"
                         />
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm font-medium text-muted-foreground">Type</label>
-                        <div className="p-2 border rounded-lg bg-muted">
-                          <Badge variant="outline" className="capitalize">
-                            {org.type}
-                          </Badge>
+                        <label className="text-sm font-medium text-muted-foreground">Capabilities</label>
+                        <div className="p-2 border rounded-lg bg-muted flex gap-2 flex-wrap">
+                          {org.issuerEnabled && (
+                            <Badge variant="outline">Issuer</Badge>
+                          )}
+                          {org.verifierEnabled && (
+                            <Badge variant="outline">Verifier</Badge>
+                          )}
                         </div>
                       </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">Description</label>
+                      <textarea
+                        value={draftDescription}
+                        onChange={(e) => setDraftDescription(e.target.value)}
+                        disabled={!isEditing}
+                        className="w-full p-2 border rounded-lg bg-muted disabled:opacity-50 min-h-24 resize-none"
+                      />
                     </div>
                   </CardContent>
                 </Card>

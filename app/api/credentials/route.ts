@@ -5,6 +5,7 @@ import SupabaseRepository from '@/lib/services/supabase-repository';
 import BlockchainService from '@/lib/services/blockchain-service';
 import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getOrganizationIdentity } from '@/lib/services/organization-service';
 import { ethers } from 'ethers';
 
 /**
@@ -103,15 +104,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const identities = await SupabaseRepository.getUserIdentities(user.id);
-    const issuerDid = identities[0]?.did;
-    const issuerPrivateKey = identities[0]?.privateKeyHex;
-    if (!issuerDid || !issuerPrivateKey) {
+    const admin = createAdminClient();
+    const orgIdentity = await getOrganizationIdentity(admin, user.id);
+    if (!orgIdentity?.did || !orgIdentity?.privateKeyHex) {
       return NextResponse.json(
-        { success: false, error: 'No issuer identity found' },
+        {
+          success: false,
+          error:
+            'No issuer organization identity found. Visit Issuer > Organization to initialize your organization DID.',
+        },
         { status: 400 }
       );
     }
+
+    const issuerDid = orgIdentity.did;
+    const issuerPrivateKey = orgIdentity.privateKeyHex;
 
     // Create verifiable credential (signed)
     const issuanceDate = new Date();
@@ -131,7 +138,6 @@ export async function POST(request: NextRequest) {
     console.log('[v0] Credential hash created:', credentialHash.slice(0, 16));
 
     // 2. Save to Supabase (fast, queryable)
-    const admin = createAdminClient();
     const { data: row, error: saveError } = await admin
       .from('verifiable_credentials')
       .upsert(

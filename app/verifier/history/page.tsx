@@ -24,7 +24,7 @@ export default function VerifierHistoryPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const res = await fetch("/api/presentations", {
+        const res = await fetch("/api/verification-events", {
           method: "GET",
           headers: { "x-active-role": "verifier" },
           cache: "no-store",
@@ -36,36 +36,20 @@ export default function VerifierHistoryPage() {
         }
 
         const items = Array.isArray(json.data) ? json.data : [];
-        const next: VerificationRecord[] = [];
-
-        for (const item of items) {
-          const presentation = item?.presentation;
-          const holderDid = typeof presentation?.holder === "string" ? presentation.holder : "";
-          const holderAddress = holderDid ? holderDid.split(":").pop() || holderDid : "";
-
-          const verifyResult = presentation && holderAddress
-            ? VerificationService.verifyPresentation(presentation, holderAddress)
-            : { valid: false };
-
-          const result: "valid" | "invalid" | "expired" = verifyResult.valid
-            ? "valid"
-            : "invalid";
-
-          const vcs = Array.isArray(presentation?.verifiableCredential)
-            ? presentation.verifiableCredential
-            : [];
-
-          const verifiedAt = item?.createdAt ? new Date(item.createdAt) : new Date();
-
-          for (const vc of vcs) {
-            const types = Array.isArray(vc?.type) ? vc.type : [];
-            const credentialType =
-              types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
-            const issuer = typeof vc?.issuer === "string" ? vc.issuer : "";
-            const id = `${item?.id || holderDid}-${vc?.id || credentialType || "cred"}`;
-            next.push({ id, credentialType, issuer, verifiedAt, result });
-          }
-        }
+        const next: VerificationRecord[] = items.map((ev: any) => {
+          const verifiedAt = ev?.verified_at ? new Date(ev.verified_at) : new Date();
+          const result: "valid" | "invalid" | "expired" =
+            ev?.result === "valid" || ev?.result === "invalid" || ev?.result === "expired"
+              ? ev.result
+              : "invalid";
+          return {
+            id: String(ev?.id || `${ev?.presentation_id || "evt"}-${ev?.credential_id || "cred"}`),
+            credentialType: String(ev?.credential_type || ""),
+            issuer: String(ev?.issuer_did || ""),
+            verifiedAt,
+            result,
+          };
+        });
 
         setRecords(next);
       } catch (e) {

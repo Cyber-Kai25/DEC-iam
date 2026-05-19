@@ -61,7 +61,9 @@ export interface Organization {
   name: string;
   description?: string;
   didDocument?: DIDDocument;
-  type: "issuer" | "verifier";
+  issuerEnabled: boolean;
+  verifierEnabled: boolean;
+  verifiedAt?: string;
   createdAt: Date;
   updatedAt: Date;
   metadata?: Record<string, unknown>;
