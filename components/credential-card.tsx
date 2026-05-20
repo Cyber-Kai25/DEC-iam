@@ -67,17 +67,24 @@ export function CredentialCard({
           <label className="text-xs font-semibold text-muted-foreground uppercase">
             Issuer
           </label>
-          <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-            <code className="text-xs flex-1 font-mono text-foreground truncate">
-              {credential.issuer}
-            </code>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => copyToClipboard(credential.issuer, "Issuer")}
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
+          <div className="p-3 bg-muted rounded-lg space-y-1">
+            {(credential as any)._issuerName && (
+              <div className="text-sm font-semibold text-foreground">
+                {(credential as any)._issuerName}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <code className="text-xs flex-1 font-mono text-foreground truncate">
+                {credential.issuer}
+              </code>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => copyToClipboard(credential.issuer, "Issuer DID")}
+              >
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </div>
 

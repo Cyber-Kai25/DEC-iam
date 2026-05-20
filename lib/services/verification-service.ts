@@ -78,8 +78,16 @@ export class VerificationService {
 
     try {
       // Reconstruct the original credential for signing
+      // Strip proof and any underscore-prefixed metadata fields (e.g. _issuerName)
+      // that were added after signing
       const { proof, ...credentialWithoutProof } = credential;
-      const credentialStr = JSON.stringify(credentialWithoutProof);
+      const cleaned: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(credentialWithoutProof)) {
+        if (!key.startsWith("_")) {
+          cleaned[key] = value;
+        }
+      }
+      const credentialStr = JSON.stringify(cleaned);
 
       return KeyManagement.verifySignature(
         credentialStr,

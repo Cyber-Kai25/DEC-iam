@@ -1,63 +1,72 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getAuthContext } from '@/lib/middleware/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient as createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getOrganizationDid } from "@/lib/services/organization-service";
 
 /**
  * GET /api/audit-logs
- * Get audit logs (issuer/verifier only)
+ * Fetch real audit logs from the audit_logs table for the user's organization DID.
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await getAuthContext(request);
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!auth.isAuthenticated) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!['issuer', 'verifier'].includes(auth.activeRole)) {
+    const activeRole = request.headers.get("x-active-role") || "issuer";
+    if (!["issuer", "verifier"].includes(activeRole)) {
       return NextResponse.json(
-        { success: false, error: 'Forbidden: Only issuers and verifiers can access audit logs' },
+        { success: false, error: "Forbidden: Only issuers and verifiers can access audit logs" },
         { status: 403 }
       );
     }
 
-    const logs = [
-      {
-        id: `log_1`,
-        userId: auth.userId,
-        action: auth.activeRole === 'issuer' ? 'credential_issued' : 'verification_created',
-        resourceType: auth.activeRole === 'issuer' ? 'credential' : 'verification',
-        resourceId: `${auth.activeRole}_res_1`,
-        result: 'success',
-        ipAddress: '192.168.1.1',
-        userAgent: 'Mozilla/5.0...',
-        timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      },
-      {
-        id: `log_2`,
-        userId: auth.userId,
-        action: 'organization_updated',
-        resourceType: 'organization',
-        resourceId: `org_${auth.userId}`,
-        result: 'success',
-        ipAddress: '192.168.1.1',
-        userAgent: 'Mozilla/5.0...',
-        timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000),
-      },
-    ];
+    const admin = createAdminClient();
+    const orgDid = await getOrganizationDid(admin, user.id);
 
-    console.log('[v0] Fetched audit logs for user:', { userId: auth.userId, count: logs.length });
+    if (!orgDid) {
+      return NextResponse.json({ success: true, data: [] });
+    }
 
-    return NextResponse.json({
-      success: true,
-      data: logs,
-    });
+    const url = new URL(request.url);
+    const limit = Math.min(Number(url.searchParams.get("limit") || "200"), 500);
+
+    const { data, error } = await admin
+      .from("audit_logs")
+      .select("*")
+      .eq("actor_did", orgDid)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error("[audit] Failed to fetch audit logs:", error);
+      return NextResponse.json(
+        { success: false, error: "Failed to fetch audit logs" },
+        { status: 500 }
+      );
+    }
+
+    const logs = (data || []).map((row: any) => ({
+      id: row.id,
+      action: row.action,
+      actorDid: row.actor_did,
+      resourceId: row.resource_id,
+      resourceType: row.resource_type,
+      status: row.status,
+      details: row.details,
+      timestamp: row.created_at,
+    }));
+
+    return NextResponse.json({ success: true, data: logs });
   } catch (error) {
-    console.error('[v0] Get audit logs error:', error);
+    console.error("[audit] Get audit logs error:", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch audit logs' },
+      { success: false, error: "Failed to fetch audit logs" },
       { status: 500 }
     );
   }

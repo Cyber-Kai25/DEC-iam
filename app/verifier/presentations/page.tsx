@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
-import VerificationService from "@/lib/services/verification-service";
 
 type PresentationItem = {
   id: string;
@@ -18,14 +17,6 @@ type PresentationItem = {
   expiresAt?: string;
   presentation: any;
 };
-
-function extractHolderAddress(presentation: any): string {
-  const holder = presentation?.holder;
-  if (typeof holder !== "string") return "";
-  const parts = holder.split(":");
-  const last = parts[parts.length - 1];
-  return last || holder;
-}
 
 export default function VerifierPresentationsInboxPage() {
   const [items, setItems] = useState<PresentationItem[]>([]);
@@ -81,52 +72,33 @@ export default function VerifierPresentationsInboxPage() {
   const handleVerify = (item: PresentationItem) => {
     void (async () => {
       try {
-        if (!item.presentation) {
-          toast.error("No presentation payload");
-          return;
-        }
-
-        const holderAddress = extractHolderAddress(item.presentation);
-        const result = VerificationService.verifyPresentation(item.presentation, holderAddress);
-        if (!result.valid) {
-          toast.error(result.error || "Presentation verification failed");
-          return;
-        }
-
-        const vcs = Array.isArray(item.presentation?.verifiableCredential)
-          ? item.presentation.verifiableCredential
-          : [];
-
-        const createEventPromises = vcs.map((vc: any) => {
-          const types = Array.isArray(vc?.type) ? vc.type : [];
-          const credentialType =
-            types.find((t: string) => t !== "VerifiableCredential") || types[0] || "";
-          const issuerDid = typeof vc?.issuer === "string" ? vc.issuer : "";
-          const subjectDid = typeof vc?.credentialSubject?.id === "string" ? vc.credentialSubject.id : "";
-          const credentialId = typeof vc?.id === "string" ? vc.id : "";
-
-          return fetch("/api/verification-events", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-active-role": "verifier",
-            },
-            body: JSON.stringify({
-              subjectDid,
-              issuerDid,
-              credentialId,
-              credentialType,
-              presentationId: item.id,
-              result: "valid",
-              details: {
-                presentationFromDid: item.fromDid,
-              },
-            }),
-          });
+        const res = await fetch("/api/presentations/verify", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-active-role": "verifier",
+          },
+          body: JSON.stringify({ messageId: item.id }),
         });
 
-        await Promise.allSettled(createEventPromises);
-        toast.success("Presentation verified");
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+          toast.error(json?.error || "Presentation verification failed");
+          return;
+        }
+
+        const nextStatus = String(json?.data?.status || "");
+        setItems((prev) =>
+          prev.map((p) => (p.id === item.id ? { ...p, status: nextStatus } : p))
+        );
+
+        if (nextStatus === "accepted") {
+          toast.success("Presentation verified");
+        } else if (nextStatus === "rejected") {
+          toast.error(json?.data?.verification?.error || "Presentation rejected");
+        } else {
+          toast.success("Presentation processed");
+        }
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Presentation verification failed");
       }

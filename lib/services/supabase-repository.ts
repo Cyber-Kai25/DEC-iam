@@ -256,23 +256,26 @@ export class SupabaseRepository {
       let query = (await supabase).from("verifiable_credentials").select("*");
 
       // Filter based on the user's DID, so each user only sees their own credentials.
-      // This aligns with the project schema (credentials link to identities via issuer_did/subject_did).
       const identities = await this.getUserIdentities(userId);
-      const did = identities[0]?.did;
-      if (did) {
-        if (role === "owner") {
-          query = query.eq("subject_did", did);
-        }
-        if (role === "issuer") {
-          query = query.eq("issuer_did", did);
-        }
-      }
+      const personalDid = identities[0]?.did;
 
       if (role === "owner") {
+        if (personalDid) {
+          query = query.eq("subject_did", personalDid);
+        }
         query = query.eq("status", "active");
       } else if (role === "issuer") {
-        query = query.eq("status", "active");
+        // For issuer, credentials are issued with the ORGANIZATION DID, not personal DID.
+        // Look up the org DID via organization_memberships → organizations.
+        const orgDid = await this.getOrganizationDidForUser(userId);
+        const issuerDid = orgDid || personalDid;
+        if (issuerDid) {
+          query = query.eq("issuer_did", issuerDid);
+        }
+        // Show all statuses (active + revoked) so issuer can see full history
       }
+
+      query = query.order("created_at", { ascending: false });
 
       const { data, error } = await query;
 
@@ -285,6 +288,35 @@ export class SupabaseRepository {
     } catch (error) {
       console.error("[v0] Exception fetching credentials:", error);
       return [];
+    }
+  }
+
+  /**
+   * Look up the organization DID for a user via memberships table.
+   */
+  private static async getOrganizationDidForUser(userId: string): Promise<string | null> {
+    try {
+      const supabase = this.getClient();
+      const { data: membership, error: memErr } = await (await supabase)
+        .from("organization_memberships")
+        .select("organization_id")
+        .eq("user_id", userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (memErr || !membership) return null;
+
+      const orgId = (membership as any).organization_id as string;
+      const { data: org, error: orgErr } = await (await supabase)
+        .from("organizations")
+        .select("did")
+        .eq("id", orgId)
+        .maybeSingle();
+
+      if (orgErr || !org) return null;
+      return ((org as any).did as string) || null;
+    } catch {
+      return null;
     }
   }
 
@@ -595,7 +627,7 @@ export class SupabaseRepository {
   }
 
   private static mapCredentialFromDB(data: any): VerifiableCredential {
-    return data.credential_json || {
+    const base = data.credential_json || {
       id: data.credential_id,
       type: data.credential_type,
       issuer: data.issuer_did,
@@ -604,6 +636,15 @@ export class SupabaseRepository {
       credentialSubject: data.credential_subject,
       proof: data.proof,
     };
+    // Always attach DB status so UI can distinguish active vs revoked
+    base._status = data.status || "active";
+    base._credentialId = data.credential_id;
+    base._subjectDid = data.subject_did;
+    // Issuer name (stored in credential_json at issuance time)
+    if (!base._issuerName && data.credential_json?._issuerName) {
+      base._issuerName = data.credential_json._issuerName;
+    }
+    return base;
   }
 
   private static mapPolicyFromDB(data: any): AccessControlPolicy {

@@ -2,27 +2,102 @@
 
 import { ProtectedRoute } from "@/components/protected-route";
 import { AppShell } from "@/components/app-shell";
-import { useIdentity } from "@/lib/context/identity-context";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { XCircle, AlertCircle } from "lucide-react";
-import { useState } from "react";
+import { XCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-export default function IssuerRevokePage() {
-  const { credentials } = useIdentity();
-  const [revoked, setRevoked] = useState<string[]>([]);
+type CredRow = {
+  id: string;
+  type: string | string[];
+  issuer: string;
+  issuanceDate: string;
+  expirationDate?: string;
+  _status?: string;
+  _credentialId?: string;
+  _subjectDid?: string;
+};
 
-  const activeCredentials = credentials.filter(
-    (c) => c.issuer && (!c.expirationDate || new Date(c.expirationDate) > new Date()) && !revoked.includes(c.id)
+function credType(c: CredRow) {
+  const t = c.type;
+  if (Array.isArray(t)) return t.find((x) => x !== "VerifiableCredential") || t[0] || "Credential";
+  return typeof t === "string" ? t : "Credential";
+}
+
+export default function IssuerRevokePage() {
+  const [credentials, setCredentials] = useState<CredRow[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const fetchCredentials = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/credentials", {
+        method: "GET",
+        headers: { "x-active-role": "issuer" },
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (res.ok && json?.success) {
+        setCredentials(json.data || []);
+      }
+    } catch (e) {
+      toast.error("Failed to load credentials");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCredentials();
+  }, []);
+
+  const activeCredentials = useMemo(
+    () =>
+      credentials.filter(
+        (c) =>
+          c._status !== "revoked" &&
+          (!c.expirationDate || new Date(c.expirationDate) > new Date())
+      ),
+    [credentials]
   );
 
-  const revokedCredentials = credentials.filter((c) => revoked.includes(c.id));
+  const revokedCredentials = useMemo(
+    () => credentials.filter((c) => c._status === "revoked"),
+    [credentials]
+  );
 
-  const handleRevoke = (credentialId: string) => {
-    setRevoked([...revoked, credentialId]);
-    toast.success("Credential revoked successfully");
+  const handleRevoke = async (cred: CredRow) => {
+    const credentialId = cred._credentialId || cred.id;
+    setRevoking(credentialId);
+    try {
+      const res = await fetch("/api/credentials/revoke", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-active-role": "issuer",
+        },
+        body: JSON.stringify({ credentialId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error || "Failed to revoke credential");
+        return;
+      }
+      toast.success("Credential revoked successfully");
+      // Update local state
+      setCredentials((prev) =>
+        prev.map((c) =>
+          (c._credentialId || c.id) === credentialId ? { ...c, _status: "revoked" } : c
+        )
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to revoke credential");
+    } finally {
+      setRevoking(null);
+    }
   };
 
   return (
@@ -30,21 +105,27 @@ export default function IssuerRevokePage() {
       <AppShell>
         <div className="space-y-8">
           {/* Header */}
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Revoke Credentials</h1>
-            <p className="text-muted-foreground mt-2">
-              Invalidate previously issued credentials
-            </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Revoke Credentials</h1>
+              <p className="text-muted-foreground mt-2">
+                Invalidate previously issued credentials
+              </p>
+            </div>
+            <Button variant="outline" onClick={fetchCredentials} disabled={isLoading}>
+              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
           </div>
 
           {/* Warning */}
-          <Card className="border-amber-200 bg-amber-50">
+          <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
             <CardContent className="pt-6 flex gap-3">
               <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-amber-900">Revocation is permanent</p>
-                <p className="text-sm text-amber-800 mt-1">
-                  Once revoked, a credential cannot be verified and recipients will be notified
+                <p className="font-medium text-amber-900 dark:text-amber-200">Revocation is permanent</p>
+                <p className="text-sm text-amber-800 dark:text-amber-300 mt-1">
+                  Once revoked, a credential cannot be verified and the status is recorded in the database
                 </p>
               </div>
             </CardContent>
@@ -73,33 +154,35 @@ export default function IssuerRevokePage() {
             </Card>
           </div>
 
-          {/* Revoke List */}
+          {/* Active list */}
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">Active Credentials</h2>
-            {activeCredentials.length === 0 ? (
-              <Card>
-                <CardContent className="pt-6 text-center text-muted-foreground">
-                  No active credentials available to revoke
-                </CardContent>
-              </Card>
+            {isLoading ? (
+              <Card><CardContent className="pt-6 text-center text-muted-foreground">Loading...</CardContent></Card>
+            ) : activeCredentials.length === 0 ? (
+              <Card><CardContent className="pt-6 text-center text-muted-foreground">No active credentials available to revoke</CardContent></Card>
             ) : (
               <div className="space-y-2">
                 {activeCredentials.map((cred) => (
-                  <Card key={cred.id}>
+                  <Card key={cred.id || cred._credentialId}>
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium">{cred.type[0]}</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium">{credType(cred)}</p>
                           <p className="text-sm text-muted-foreground">
                             Issued: {new Date(cred.issuanceDate).toLocaleDateString()}
                           </p>
+                          {cred._subjectDid && (
+                            <p className="text-xs text-muted-foreground truncate mt-1">To: {cred._subjectDid}</p>
+                          )}
                         </div>
                         <Button
                           variant="destructive"
-                          onClick={() => handleRevoke(cred.id)}
+                          onClick={() => handleRevoke(cred)}
+                          disabled={revoking === (cred._credentialId || cred.id)}
                         >
                           <XCircle className="h-4 w-4 mr-2" />
-                          Revoke
+                          {revoking === (cred._credentialId || cred.id) ? "Revoking..." : "Revoke"}
                         </Button>
                       </div>
                     </CardContent>
@@ -109,19 +192,19 @@ export default function IssuerRevokePage() {
             )}
           </div>
 
-          {/* Revoked List */}
+          {/* Revoked list */}
           {revokedCredentials.length > 0 && (
             <div className="space-y-4">
               <h2 className="text-lg font-semibold">Revoked Credentials</h2>
               <div className="space-y-2">
                 {revokedCredentials.map((cred) => (
-                  <Card key={cred.id} className="opacity-60">
+                  <Card key={cred.id || cred._credentialId} className="opacity-60">
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium line-through">{cred.type[0]}</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium line-through">{credType(cred)}</p>
                           <p className="text-sm text-muted-foreground">
-                            Revoked: {new Date().toLocaleDateString()}
+                            Issued: {new Date(cred.issuanceDate).toLocaleDateString()}
                           </p>
                         </div>
                         <Badge variant="destructive">Revoked</Badge>

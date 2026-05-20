@@ -14,6 +14,7 @@ interface VerificationRecord {
   id: string;
   credentialType: string;
   issuer: string;
+  issuerName: string;
   verifiedAt: Date;
   result: "valid" | "invalid" | "expired";
 }
@@ -46,6 +47,7 @@ export default function VerifierHistoryPage() {
             id: String(ev?.id || `${ev?.presentation_id || "evt"}-${ev?.credential_id || "cred"}`),
             credentialType: String(ev?.credential_type || ""),
             issuer: String(ev?.issuer_did || ""),
+            issuerName: String(ev?.details?.issuerName || ""),
             verifiedAt,
             result,
           };
@@ -146,13 +148,18 @@ export default function VerifierHistoryPage() {
                   <Card key={record.id}>
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <p className="font-medium">{record.credentialType}</p>
                           <p className="text-sm text-muted-foreground">
-                            {record.issuer} • {record.verifiedAt.toLocaleDateString()}
+                            {record.issuerName ? `${record.issuerName} • ` : ""}{record.verifiedAt.toLocaleDateString()}
                           </p>
+                          {record.issuer && (
+                            <p className="text-xs text-muted-foreground truncate">
+                              {record.issuer}
+                            </p>
+                          )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
                           <Badge
                             variant={
                               record.result === "valid"
@@ -181,11 +188,14 @@ export default function VerifierHistoryPage() {
                 <Card key={record.id}>
                   <CardContent className="pt-6">
                     <div className="flex items-center justify-between">
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <p className="font-medium">{record.credentialType}</p>
                         <p className="text-sm text-muted-foreground">
-                          {record.issuer} • {record.verifiedAt.toLocaleDateString()}
+                          {record.issuerName ? `${record.issuerName} • ` : ""}{record.verifiedAt.toLocaleDateString()}
                         </p>
+                        {record.issuer && (
+                          <p className="text-xs text-muted-foreground truncate">{record.issuer}</p>
+                        )}
                       </div>
                       <Button variant="outline" size="sm">
                         <Eye className="h-4 w-4" />
@@ -209,11 +219,14 @@ export default function VerifierHistoryPage() {
                   <Card key={record.id}>
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <p className="font-medium">{record.credentialType}</p>
                           <p className="text-sm text-muted-foreground">
-                            {record.issuer} • {record.verifiedAt.toLocaleDateString()}
+                            {record.issuerName ? `${record.issuerName} • ` : ""}{record.verifiedAt.toLocaleDateString()}
                           </p>
+                          {record.issuer && (
+                            <p className="text-xs text-muted-foreground truncate">{record.issuer}</p>
+                          )}
                         </div>
                         <Button variant="outline" size="sm">
                           <Eye className="h-4 w-4" />
@@ -238,11 +251,14 @@ export default function VerifierHistoryPage() {
                   <Card key={record.id}>
                     <CardContent className="pt-6">
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <p className="font-medium">{record.credentialType}</p>
                           <p className="text-sm text-muted-foreground">
-                            {record.issuer} • {record.verifiedAt.toLocaleDateString()}
+                            {record.issuerName ? `${record.issuerName} • ` : ""}{record.verifiedAt.toLocaleDateString()}
                           </p>
+                          {record.issuer && (
+                            <p className="text-xs text-muted-foreground truncate">{record.issuer}</p>
+                          )}
                         </div>
                         <Button variant="outline" size="sm">
                           <Eye className="h-4 w-4" />

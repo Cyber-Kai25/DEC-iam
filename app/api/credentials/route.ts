@@ -5,7 +5,7 @@ import SupabaseRepository from '@/lib/services/supabase-repository';
 import BlockchainService from '@/lib/services/blockchain-service';
 import { createClient as createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getOrganizationIdentity } from '@/lib/services/organization-service';
+import { getOrganizationIdentity, getOrganizationDid, findUserOrganization } from '@/lib/services/organization-service';
 import { ethers } from 'ethers';
 
 /**
@@ -29,10 +29,8 @@ export async function GET(request: NextRequest) {
     const activeRole = (request.headers.get('x-active-role') as any) || 'owner';
 
     // Check permission
-    const hasPermission =
-      activeRole === 'verifier'
-        ? RBACService.getRolePermissions(activeRole).includes('credential:read:any')
-        : RBACService.getRolePermissions(activeRole).includes('credential:read:own');
+    const perms = RBACService.getRolePermissions(activeRole);
+    const hasPermission = perms.includes('credential:read:own') || perms.includes('credential:read:any');
     if (!hasPermission) {
       return NextResponse.json(
         { success: false, error: 'Forbidden: No permission to read credentials' },
@@ -40,8 +38,74 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Fetch credentials from Supabase (role-specific)
-    const credentials = await SupabaseRepository.getCredentials(user.id, activeRole);
+    // Fetch credentials from Supabase using admin client (role-specific)
+    const admin = createAdminClient();
+
+    let query = admin.from('verifiable_credentials').select('*');
+
+    if (activeRole === 'owner') {
+      // Owner sees credentials where they are the subject
+      const { data: identity } = await admin
+        .from('identities')
+        .select('did')
+        .eq('metadata->>userId', user.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (identity?.did) {
+        query = query.eq('subject_did', identity.did);
+      }
+      query = query.eq('status', 'active');
+    } else if (activeRole === 'issuer') {
+      // Issuer sees credentials they issued (via org DID)
+      const orgDid = await getOrganizationDid(admin, user.id);
+      if (orgDid) {
+        query = query.eq('issuer_did', orgDid);
+      } else {
+        // Fallback to personal DID
+        const { data: identity } = await admin
+          .from('identities')
+          .select('did')
+          .eq('metadata->>userId', user.id)
+          .limit(1)
+          .maybeSingle();
+        if (identity?.did) {
+          query = query.eq('issuer_did', identity.did);
+        }
+      }
+      // Show all statuses (active + revoked) so issuer can see full history
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    const { data: rows, error: fetchErr } = await query;
+
+    if (fetchErr) {
+      console.error('[v0] Error fetching credentials:', fetchErr);
+      return NextResponse.json(
+        { success: false, error: 'Failed to fetch credentials' },
+        { status: 500 }
+      );
+    }
+
+    const credentials = (rows || []).map((row: any) => {
+      const base = row.credential_json || {
+        id: row.credential_id,
+        type: row.credential_type,
+        issuer: row.issuer_did,
+        issuanceDate: row.issuance_date,
+        expirationDate: row.expiration_date || undefined,
+        credentialSubject: row.credential_subject,
+        proof: row.proof,
+      };
+      base._status = row.status || 'active';
+      base._credentialId = row.credential_id;
+      base._subjectDid = row.subject_did;
+      if (!base._issuerName && row.credential_json?._issuerName) {
+        base._issuerName = row.credential_json._issuerName;
+      }
+      return base;
+    });
 
     console.log('[v0] Fetched credentials for user:', { userId: user.id, role: activeRole, count: credentials.length });
 
@@ -132,8 +196,15 @@ export async function POST(request: NextRequest) {
       expirationDays || 365
     );
 
+    // Look up issuer organization name to embed in credential metadata
+    const orgRow = await findUserOrganization(admin, user.id);
+    const issuerName = orgRow?.name || null;
+
+    // Attach org name as non-standard metadata (does NOT affect signature)
+    const credentialWithMeta = { ...credential, _issuerName: issuerName } as any;
+
     // === DUAL-WRITE PATTERN ===
-    // 1. Hash credential for blockchain anchoring
+    // 1. Hash credential for blockchain anchoring (uses original signed credential)
     const credentialHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(credential)));
     console.log('[v0] Credential hash created:', credentialHash.slice(0, 16));
 
@@ -152,7 +223,7 @@ export async function POST(request: NextRequest) {
             : null,
           credential_subject: (credential as any).credentialSubject,
           proof: (credential as any).proof,
-          credential_json: credential as any,
+          credential_json: credentialWithMeta,
           status: 'active',
           blockchain_hash: null,
         },
@@ -193,7 +264,24 @@ export async function POST(request: NextRequest) {
       // The credential is still valid in Supabase
     }
 
-    // 4. Return with both references
+    // 4. Write audit log
+    await admin.from("audit_logs").insert({
+      actor_did: issuerDid,
+      action: "credential_issued",
+      resource_id: (credential as any).id || savedCredential.id,
+      resource_type: "credential",
+      status: "success",
+      details: {
+        credentialType,
+        subjectDid,
+        blockchainAnchored: !!blockchainTx,
+        issuedAt: new Date().toISOString(),
+      },
+    }).then(({ error: auditErr }) => {
+      if (auditErr) console.error("[v0] Failed to write audit log:", auditErr);
+    });
+
+    // 5. Return with both references
     return NextResponse.json(
       {
         success: true,

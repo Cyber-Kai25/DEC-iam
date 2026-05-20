@@ -17,6 +17,7 @@ export default function VerifierVerifyPage() {
   const [verificationResult, setVerificationResult] = useState<{
     valid: boolean;
     issuer: string;
+    issuerName?: string;
     subject: string;
     type: string;
     issuanceDate: string;
@@ -36,6 +37,7 @@ export default function VerifierVerifyPage() {
       setVerificationResult({
         valid: true,
         issuer: parsed.issuer || "Unknown",
+        issuerName: parsed._issuerName || undefined,
         subject: parsed.subject || "Unknown",
         type: Array.isArray(parsed.type) ? parsed.type[0] : parsed.type || "Unknown",
         issuanceDate: parsed.issuanceDate || new Date().toISOString(),
@@ -130,6 +132,11 @@ export default function VerifierVerifyPage() {
                   <CardContent className="space-y-3 text-sm">
                     <div>
                       <p className="text-xs font-medium text-muted-foreground mb-1">Issuer</p>
+                      {verificationResult.issuerName && (
+                        <p className="text-sm font-semibold mb-0.5">
+                          {verificationResult.issuerName}
+                        </p>
+                      )}
                       <p className="font-mono text-xs break-all">
                         {verificationResult.issuer}
                       </p>
